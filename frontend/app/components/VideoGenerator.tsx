@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Brand, generateVideo, GenerateResponse } from "../lib/api";
 import { Sparkles, Send, ChevronDown } from "lucide-react";
 
@@ -12,6 +12,13 @@ interface VideoGeneratorProps {
 export function VideoGenerator({ brands, onGenerated }: VideoGeneratorProps) {
   const [selectedBrandId, setSelectedBrandId] = useState(brands[0]?.id ?? "");
   const [prompt, setPrompt] = useState("");
+
+  // Sync selectedBrandId when brands load asynchronously after mount
+  useEffect(() => {
+    if (!selectedBrandId && brands.length > 0) {
+      setSelectedBrandId(brands[0].id);
+    }
+  }, [brands, selectedBrandId]);
   const [additionalInstructions, setAdditionalInstructions] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
