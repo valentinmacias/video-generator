@@ -59,7 +59,6 @@ async def generate_branded_video(
         aspect_ratio=aspect_ratio,
         number_of_videos=1,
         duration_seconds=duration_seconds,
-        generate_audio=True,
     )
 
     # Use the first reference image for image-conditioned generation if provided
