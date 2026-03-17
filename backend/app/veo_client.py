@@ -107,7 +107,8 @@ async def poll_operation(operation_name: str) -> Dict[str, Any]:
     """
     client = get_veo_client()
     try:
-        operation = await asyncio.to_thread(client.operations.get, operation_name)
+        operation_obj = genai_types.GenerateVideosOperation(name=operation_name)
+        operation = await asyncio.to_thread(client.operations.get, operation_obj)
         result: Dict[str, Any] = {
             "done": operation.done,
             "video_uri": None,
