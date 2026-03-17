@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Brand, generateVideo, GenerateResponse } from "../lib/api";
 import { Sparkles, Send, ChevronDown } from "lucide-react";
 
@@ -10,31 +10,29 @@ interface VideoGeneratorProps {
 }
 
 export function VideoGenerator({ brands, onGenerated }: VideoGeneratorProps) {
-  const [selectedBrandId, setSelectedBrandId] = useState(brands[0]?.id ?? "");
+  // Tracks which brand the user explicitly picked in the <select>
+  const [selectedBrandId, setSelectedBrandId] = useState("");
   const [prompt, setPrompt] = useState("");
-
-  // Sync selectedBrandId when brands load asynchronously after mount
-  useEffect(() => {
-    if (!selectedBrandId && brands.length > 0) {
-      setSelectedBrandId(brands[0].id);
-    }
-  }, [brands, selectedBrandId]);
   const [additionalInstructions, setAdditionalInstructions] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const selectedBrand = brands.find((b) => b.id === selectedBrandId);
+  // Use whatever the user picked, or fall back to the first brand in the list.
+  // This means the button works immediately even if the <select> state hasn't
+  // been explicitly set yet (brands loaded after component mounted).
+  const effectiveBrandId = selectedBrandId || brands[0]?.id || "";
+  const selectedBrand = brands.find((b) => b.id === effectiveBrandId);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!prompt.trim() || !selectedBrandId) return;
+    if (!prompt.trim() || !effectiveBrandId) return;
 
     setLoading(true);
     setError(null);
     try {
       const response = await generateVideo(
-        selectedBrandId,
+        effectiveBrandId,
         prompt.trim(),
         additionalInstructions.trim() || undefined,
       );
@@ -72,7 +70,7 @@ export function VideoGenerator({ brands, onGenerated }: VideoGeneratorProps) {
             </p>
           ) : (
             <select
-              value={selectedBrandId}
+              value={effectiveBrandId}
               onChange={(e) => setSelectedBrandId(e.target.value)}
               className="w-full bg-surface border border-surface-border text-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent"
             >
@@ -165,7 +163,7 @@ export function VideoGenerator({ brands, onGenerated }: VideoGeneratorProps) {
         {/* Submit */}
         <button
           type="submit"
-          disabled={loading || !prompt.trim() || !selectedBrandId || brands.length === 0}
+          disabled={loading || !prompt.trim() || !effectiveBrandId}
           className="w-full flex items-center justify-center gap-2 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-700 disabled:text-slate-500 text-white font-medium rounded-lg px-4 py-2.5 text-sm transition-colors"
         >
           {loading ? (
