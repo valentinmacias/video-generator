@@ -3,6 +3,7 @@ import type { NextConfig } from "next";
 const BACKEND = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   images: {
     remotePatterns: [
       { protocol: "https", hostname: "storage.googleapis.com" },
