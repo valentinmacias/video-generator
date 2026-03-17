@@ -6,6 +6,7 @@ Handles:
 - Polling operation status
 - Extracting the final video URI
 """
+import asyncio
 import logging
 import base64
 from typing import Optional, List, Dict, Any, Tuple
@@ -106,7 +107,7 @@ async def poll_operation(operation_name: str) -> Dict[str, Any]:
     """
     client = get_veo_client()
     try:
-        operation = client.operations.get(operation_name)
+        operation = await asyncio.to_thread(client.operations.get, operation_name)
         result: Dict[str, Any] = {
             "done": operation.done,
             "video_uri": None,

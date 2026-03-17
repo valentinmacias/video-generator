@@ -46,7 +46,7 @@ async def _process_one_video(video: dict) -> None:
             await update_video_failed(video_id, "Operation completed but no video data found")
             return
 
-        await update_video_completed(video_id, gcs_uri, thumbnail_url=None)
+        await update_video_completed(video_id, signed_url, thumbnail_url=None)
         logger.info(f"Video {video_id} successfully stored at {gcs_uri}")
 
     except Exception as e:
