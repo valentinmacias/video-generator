@@ -55,13 +55,11 @@ async def generate_branded_video(
     logger.info(f"Starting Veo generation | model={settings.VEO_MODEL} | prompt={final_prompt[:80]}…")
 
     # Build the video generation config
-    video_config = genai_types.GenerateVideoConfig(
+    video_config = genai_types.GenerateVideosConfig(
         aspect_ratio=aspect_ratio,
         number_of_videos=1,
         duration_seconds=duration_seconds,
         generate_audio=True,
-        # Resolution hint (Veo 3.1 supports 720p / 1080p)
-        resolution="1080p",
     )
 
     # Use the first reference image for image-conditioned generation if provided
