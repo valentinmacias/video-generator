@@ -10,9 +10,9 @@ import {
 import { clsx } from "clsx";
 import {
   Brand, GenerateResponse, GenerateRequest,
-  VideoParams, ImageParams, RunwayParams, KlingParams, ModelProvider,
-  DEFAULT_VIDEO_PARAMS, DEFAULT_IMAGE_PARAMS, DEFAULT_RUNWAY_PARAMS, DEFAULT_KLING_PARAMS,
-  VeoModel, RunwayModel,
+  ImageParams, RunwayParams, ModelProvider,
+  DEFAULT_IMAGE_PARAMS, DEFAULT_RUNWAY_PARAMS,
+  RunwayModel,
   generateAsset, fileToBase64, getVideo, VideoStatus,
 } from "../lib/api";
 import { CircularProgress } from "./CircularProgress";
@@ -84,12 +84,6 @@ const VIDEO_MODELS: {
     badge: "Custom Training",
     color: "from-purple-500/20 to-purple-600/10 border-purple-500/40 text-purple-300",
   },
-  {
-    provider: "veo", model: "veo-3.1-generate-preview",
-    label: "Google Veo 3.1", sublabel: "veo-3.1-preview",
-    badge: "Fallback",
-    color: "from-blue-500/20 to-blue-600/10 border-blue-500/40 text-blue-300",
-  },
 ];
 
 const IMAGE_MODELS = [
@@ -97,16 +91,9 @@ const IMAGE_MODELS = [
   { value: "imagen_pro",   label: "Imagen Pro",     badge: "Best Quality", sub: "~20s per image" },
 ];
 
-const VEO_MODELS: { value: VeoModel; label: string; badge: string }[] = [
-  { value: "veo-3.1-generate-preview", label: "Veo 3.1", badge: "Latest" },
-  { value: "veo-3.0-generate-preview", label: "Veo 3.0", badge: "Stable" },
-  { value: "veo-2.0-generate-001",     label: "Veo 2.0", badge: "Fast"   },
-];
-
 const ASPECT_RATIOS_VIDEO  = ["16:9", "9:16", "1:1", "4:3"] as const;
 const ASPECT_RATIOS_IMAGE  = ["16:9", "9:16", "1:1", "4:3"] as const;
 const RUNWAY_DURATIONS     = [5, 10] as const;
-const VEO_DURATIONS        = [5, 8, 10] as const;
 const IMAGE_COUNTS         = [1, 2, 3, 4] as const;
 
 const MOTION_OPTS   = ["subtle", "medium", "dynamic", "cinematic", "epic"] as const;
@@ -210,10 +197,9 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
   // ── Video mode state ─────────────────────────────────────────────────────────
   const [videoPhase, setVideoPhase] = useState<VideoPhase>("setup");
 
-  // Model selection
+  // Model selection — Runway only
   const [provider, setProvider]     = useState<ModelProvider>("runway");
   const [runwayModel, setRunwayModel] = useState<RunwayModel>("gen4_turbo");
-  const [veoModel, setVeoModel]     = useState<VeoModel>("veo-3.1-generate-preview");
 
   // Shared params
   const [aspectRatio, setAspectRatio] = useState("16:9");
@@ -274,48 +260,20 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
       enhance_prompt: gemini,
     };
 
-    if (provider === "runway") {
-      base.runway_params = {
-        ...DEFAULT_RUNWAY_PARAMS,
-        runway_model:           runwayModel,
-        duration:               duration as 5 | 10,
-        aspect_ratio:           aspectRatio as RunwayParams["aspect_ratio"],
-        motion_strength:        motionStrength as RunwayParams["motion_strength"],
-        camera_movement:        cameraMove as RunwayParams["camera_movement"],
-        lighting_style:         lightingStyle as RunwayParams["lighting_style"],
-        visual_style:           visualStyle as RunwayParams["visual_style"],
-        quality:                quality as RunwayParams["quality"],
-        negative_prompt:        negativePrompt || null,
-        conditioning_image_b64: refB64 ?? null,
-        reference_images_b64:   modelRef?.b64 ? [modelRef.b64] : null,
-      };
-    } else if (provider === "veo") {
-      base.video_params = {
-        ...DEFAULT_VIDEO_PARAMS,
-        veo_model:            veoModel,
-        duration:             duration as VideoParams["duration"],
-        aspect_ratio:         aspectRatio as VideoParams["aspect_ratio"],
-        camera_movement:      cameraMove as VideoParams["camera_movement"],
-        motion_strength:      motionStrength as VideoParams["motion_strength"],
-        lighting_style:       lightingStyle as VideoParams["lighting_style"],
-        visual_style:         visualStyle as VideoParams["visual_style"],
-        quality:              quality as VideoParams["quality"],
-        negative_prompt:      negativePrompt || null,
-        reference_images_b64: (refB64 || modelRef?.b64)
-          ? [...(refB64 ? [refB64] : []), ...(modelRef?.b64 ? [modelRef.b64] : [])]
-          : null,
-        start_card_b64: startCard?.b64 ?? null,
-      };
-    } else {
-      base.kling_params = {
-        ...DEFAULT_KLING_PARAMS,
-        duration:               duration as KlingParams["duration"],
-        aspect_ratio:           aspectRatio as KlingParams["aspect_ratio"],
-        negative_prompt:        negativePrompt || null,
-        conditioning_image_b64: refB64 ?? null,
-        reference_image_b64:    modelRef?.b64 ?? null,
-      };
-    }
+    base.runway_params = {
+      ...DEFAULT_RUNWAY_PARAMS,
+      runway_model:           runwayModel,
+      duration:               duration as 5 | 10,
+      aspect_ratio:           aspectRatio as RunwayParams["aspect_ratio"],
+      motion_strength:        motionStrength as RunwayParams["motion_strength"],
+      camera_movement:        cameraMove as RunwayParams["camera_movement"],
+      lighting_style:         lightingStyle as RunwayParams["lighting_style"],
+      visual_style:           visualStyle as RunwayParams["visual_style"],
+      quality:                quality as RunwayParams["quality"],
+      negative_prompt:        negativePrompt || null,
+      conditioning_image_b64: refB64 ?? null,
+      reference_images_b64:   modelRef?.b64 ? [modelRef.b64] : null,
+    };
 
     return base;
   }
@@ -504,7 +462,7 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
   const videoStepIdx = { setup: 0, "gen-ref": 1, "pick-ref": 1, animating: 2, done: 3 }[videoPhase];
   const imageStepIdx = { setup: 0, generating: 1, done: 2 }[imagePhase];
 
-  const activeProvider = VIDEO_MODELS.find((m) => m.provider === provider && m.model === (provider === "runway" ? runwayModel : veoModel));
+  const activeProvider = VIDEO_MODELS.find((m) => m.provider === provider && m.model === runwayModel);
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -737,23 +695,6 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
                           >
                             <div className="border-t border-tt-border px-4 pb-4 pt-3 space-y-4">
 
-                              {/* Veo sub-model picker (only shown when veo selected) */}
-                              {provider === "veo" && (
-                                <div className="space-y-2">
-                                  <label className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Veo Model Version</label>
-                                  <div className="grid grid-cols-3 gap-2">
-                                    {VEO_MODELS.map((m) => (
-                                      <button key={m.value} onClick={() => setVeoModel(m.value)}
-                                        className={clsx("rounded-lg border px-2 py-2 text-left text-xs transition-all",
-                                          veoModel === m.value ? "border-tt-accent/50 bg-tt-accent/10 text-tt-accent" : "border-tt-border bg-tt-surface text-tt-muted hover:border-tt-dim")}>
-                                        <p className="font-semibold">{m.label}</p>
-                                        <p className="text-[10px] opacity-70">{m.badge}</p>
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-
                               {/* Aspect ratio */}
                               <div className="space-y-2">
                                 <label className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Aspect Ratio</label>
@@ -764,7 +705,7 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
                               <div className="space-y-2">
                                 <label className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Duration</label>
                                 <div className="flex gap-1.5">
-                                  {(provider === "veo" ? VEO_DURATIONS : RUNWAY_DURATIONS).map((d) => (
+                                  {RUNWAY_DURATIONS.map((d) => (
                                     <button key={d} onClick={() => setDuration(d)}
                                       className={clsx("rounded-lg px-3 py-1.5 text-xs font-semibold border transition-all",
                                         duration === d ? "border-tt-accent/50 bg-tt-accent/10 text-tt-accent" : "border-tt-border bg-tt-surface text-tt-muted hover:border-tt-dim")}>
@@ -1297,7 +1238,12 @@ function VideoResultCard({ video, index, onVoiceover }: { video: VideoResult; in
           </div>
         )}
       </div>
-      <div className="flex items-center justify-between px-4 py-3">
+      <div className="px-4 pt-2 pb-1">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-black/80 border border-green-400/60 px-3 py-1.5 text-xs font-black text-green-400 shadow-[0_0_12px_rgba(74,222,128,0.35)]">
+          ⚡ Runway Gen-4 Turbo
+        </span>
+      </div>
+      <div className="flex items-center justify-between px-4 py-2.5">
         <div className="flex items-center gap-2">
           {video.status === "COMPLETED" ? (
             <span className="flex items-center gap-1 text-[11px] font-semibold text-tt-accent"><Check size={12} /> Ready</span>
