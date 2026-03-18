@@ -19,38 +19,54 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
-_RETRY_DELAYS = [2, 4, 8, 16]  # seconds between retries on 429
+from .config import settings
+
+logger = logging.getLogger(__name__)
+
+KLING_BASE_URL = "https://api.klingai.com"
+
+# Kling free tier enforces ~1 req/min; use longer back-off so retries
+# have a realistic chance of succeeding within a single request cycle.
+_RETRY_DELAYS = [15, 30, 60, 120]  # seconds between retries on 429
 
 
 async def _post_with_retry(url: str, json_body: Dict, headers: Dict) -> Dict:
-    """POST with exponential backoff on 429 rate-limit responses."""
+    """POST with exponential backoff on 429 rate-limit or transient errors."""
     last_exc: Exception = RuntimeError("No attempts made")
     for attempt, delay in enumerate([0] + _RETRY_DELAYS):
         if delay:
-            logger.warning(f"Kling 429 rate limit — retrying in {delay}s (attempt {attempt + 1})")
+            logger.warning(
+                f"Kling rate limit hit — waiting {delay}s before retry "
+                f"(attempt {attempt + 1}/{len(_RETRY_DELAYS) + 1})"
+            )
             await asyncio.sleep(delay)
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(url, json=json_body, headers=headers)
                 if resp.status_code == 429:
-                    last_exc = httpx.HTTPStatusError(
-                        f"429 Too Many Requests", request=resp.request, response=resp
+                    last_exc = RuntimeError(
+                        "Kling API rate limit exceeded. "
+                        "Your plan may allow only a few requests per minute — "
+                        "please wait a moment and try again, or upgrade your Kling plan."
                     )
                     continue
                 resp.raise_for_status()
                 return resp.json()
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 429:
-                last_exc = e
+                last_exc = RuntimeError(
+                    "Kling API rate limit exceeded. "
+                    "Your plan may allow only a few requests per minute — "
+                    "please wait a moment and try again, or upgrade your Kling plan."
+                )
                 continue
             raise
+        except Exception as e:
+            # Catch DNS / connection errors and retry
+            last_exc = e
+            logger.warning(f"Kling request failed ({type(e).__name__}: {e}) — will retry")
+            continue
     raise last_exc
-
-from .config import settings
-
-logger = logging.getLogger(__name__)
-
-KLING_BASE_URL = "https://api.klingai.com"
 
 # User-facing model name  →  Kling API model identifier
 _MODEL_MAP: Dict[str, str] = {
