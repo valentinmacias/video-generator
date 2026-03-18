@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List, Literal
 from enum import Enum
 from datetime import datetime
@@ -193,8 +193,10 @@ class GenerateRequest(BaseModel):
     Unified request for both video and image generation.
     Set `mode` to select the generation type, then populate either
     `video_params` or `image_params` (the other is ignored).
-    Set `model_provider` to route between Veo and Kling for video generation.
+    Set `model_provider` to route between Runway, Veo and Kling for video generation.
     """
+    model_config = ConfigDict(protected_namespaces=())
+
     brand_id:                Optional[str] = None
     mode:                    GenerationMode = GenerationMode.VIDEO
     model_provider:          Literal["runway", "veo", "kling"] = "runway"  # Runway is the default
@@ -287,6 +289,8 @@ class PromptEnhanceResponse(BaseModel):
 # ── Avatar / AI Creator schemas ────────────────────────────────────────────────
 
 class AvatarResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     id:                  str
     name:                str
     description:         Optional[str]  = None
