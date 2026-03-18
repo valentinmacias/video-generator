@@ -117,11 +117,16 @@ async def poll_operation(operation_name: str) -> Dict[str, Any]:
         }
 
         if operation.done:
+            logger.info(f"Operation done. Attrs: { {k: str(getattr(operation, k, None))[:120] for k in ['error', 'result', 'response', 'metadata']} }")
             if hasattr(operation, "error") and operation.error:
                 result["error"] = str(operation.error)
-            elif hasattr(operation, "result") and operation.result:
-                generated = operation.result.generated_videos
-                if generated:
+            else:
+                # SDK may expose result as .result or .response
+                raw_result = getattr(operation, "response", None) or getattr(operation, "result", None)
+                if raw_result:
+                    generated = getattr(raw_result, "generated_videos", None)
+                    logger.info(f"generated_videos: {generated}")
+                if raw_result and generated:
                     video = generated[0]
                     # Try GCS URI first, fall back to encoded bytes
                     if hasattr(video, "gcs_uri") and video.gcs_uri:
