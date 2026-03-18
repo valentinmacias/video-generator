@@ -73,14 +73,15 @@ def upload_video_from_uri(source_uri: str, video_id: str) -> Tuple[str, str]:
 
 def _upload_video_from_https(url: str, video_id: str) -> Tuple[str, str]:
     """Download a video from an https URL (e.g. Google Files API) and upload to GCS."""
-    # Append API key so the request is authenticated
+    # Only append Google API key for Google-hosted URLs (Files API, etc.)
     download_url = url
-    if "?" not in url:
-        download_url = f"{url}?key={settings.GOOGLE_API_KEY}"
-    else:
-        download_url = f"{url}&key={settings.GOOGLE_API_KEY}"
+    if "googleapis.com" in url or "generativelanguage.google" in url:
+        if "?" not in url:
+            download_url = f"{url}?key={settings.GOOGLE_API_KEY}"
+        else:
+            download_url = f"{url}&key={settings.GOOGLE_API_KEY}"
 
-    logger.info(f"Downloading video from Google Files API for video {video_id}")
+    logger.info(f"Downloading video from {url[:60]}... for video {video_id}")
     with httpx.Client(timeout=120, follow_redirects=True) as client:
         resp = client.get(download_url)
         resp.raise_for_status()
