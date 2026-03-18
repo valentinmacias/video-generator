@@ -11,15 +11,18 @@ from .config import settings
 from .models import (
     BrandCreate, BrandResponse,
     VideoGenerateRequest, VideoGenerateResponse, VideoResponse,
+    GenerateRequest, GenerationMode,
     VideoStatus, PromptEnhanceRequest, PromptEnhanceResponse,
 )
 from .database import (
     create_brand, get_brand, list_brands, update_brand_images,
-    create_video, update_video_operation, get_video, list_videos,
+    create_video, update_video_operation, update_video_completed,
+    update_video_failed, get_video, list_videos,
 )
 from .gemini_client import enhance_prompt
 from .veo_client import generate_branded_video
-from .storage import upload_file
+from .imagen_client import generate_images
+from .storage import upload_file, generate_signed_url
 from .worker import start_worker, stop_worker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
@@ -37,8 +40,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Video Brand Generator API",
-    version="1.0.0",
-    description="Generate brand-consistent videos with Google Veo 3.1",
+    version="2.0.0",
+    description="Generate brand-consistent videos and images with Google Veo and Imagen",
     lifespan=lifespan,
 )
 
@@ -55,7 +58,7 @@ app.add_middleware(
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "1.0.0"}
+    return {"status": "ok", "version": "2.0.0"}
 
 
 # ── Brand endpoints ────────────────────────────────────────────────────────────
@@ -85,7 +88,7 @@ async def upload_brand_images(
     brand_id: str,
     files: List[UploadFile] = File(...),
 ):
-    """Upload up to 3 brand reference images (JPEG/PNG)."""
+    """Upload up to 3 brand reference images (JPEG/PNG/WebP)."""
     brand = await get_brand(brand_id)
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
@@ -115,7 +118,7 @@ async def upload_brand_images(
 
 @app.post("/api/prompt/enhance", response_model=PromptEnhanceResponse)
 async def enhance_prompt_endpoint(payload: PromptEnhanceRequest):
-    """Preview the Gemini-enhanced cinematic prompt without generating a video."""
+    """Preview the Gemini-enhanced cinematic prompt without generating anything."""
     enhanced = await enhance_prompt(
         user_prompt=payload.user_prompt,
         brand_instructions=payload.brand_instructions,
@@ -127,68 +130,159 @@ async def enhance_prompt_endpoint(payload: PromptEnhanceRequest):
     )
 
 
-# ── Video generation ───────────────────────────────────────────────────────────
+# ── Unified generation endpoint ────────────────────────────────────────────────
 
-@app.post("/api/videos/generate", response_model=VideoGenerateResponse, status_code=202)
-async def generate_video_endpoint(payload: VideoGenerateRequest):
+@app.post("/api/generate", response_model=VideoGenerateResponse, status_code=202)
+async def generate_endpoint(payload: GenerateRequest):
     """
-    Start async video generation.
-    1. Load brand assets
-    2. Enhance prompt with Gemini
-    3. Submit to Veo 3.1 → get operation_id
-    4. Persist to DB with PROCESSING status
-    Returns immediately with the video_id for polling.
+    Unified endpoint for both video and image generation.
+
+    Video mode (async):
+      - Enhances prompt with Gemini (unless raw mode)
+      - Submits to Veo → returns operation_id for polling
+      - Background worker completes the video and updates the DB
+
+    Image mode (synchronous):
+      - Enhances prompt with Gemini (unless raw mode)
+      - Generates images with Imagen 3 immediately
+      - Uploads each image to GCS and creates a DB record per image
+      - Returns with status=COMPLETED — no polling needed
     """
     brand = await get_brand(payload.brand_id)
     if not brand:
         raise HTTPException(status_code=404, detail="Brand not found")
 
-    # Step 1 — Enhance prompt with Gemini
+    # Merge brand style guide + caller's additional instructions
     brand_instructions = brand.get("style_guide") or ""
     if payload.additional_instructions:
         brand_instructions = f"{brand_instructions}\n{payload.additional_instructions}".strip()
 
-    enhanced = await enhance_prompt(
-        user_prompt=payload.user_prompt,
-        brand_instructions=brand_instructions,
-        reference_images=brand.get("reference_images", []),
-    )
-
-    # Step 2 — Create DB record (PENDING)
-    video = await create_video(
-        brand_id=payload.brand_id,
-        user_prompt=payload.user_prompt,
-        enhanced_prompt=enhanced,
-    )
-    video_id = video["id"]
-
-    # Step 3 — Submit to Veo
-    try:
-        operation_name, _ = await generate_branded_video(
-            user_prompt=enhanced,
-            brand_references=brand.get("reference_images", []),
+    # Optionally enhance the prompt with Gemini
+    if payload.enhance_prompt:
+        final_prompt = await enhance_prompt(
+            user_prompt=payload.user_prompt,
             brand_instructions=brand_instructions,
+            reference_images=brand.get("reference_images", []),
         )
-        await update_video_operation(video_id, operation_name)
+    else:
+        final_prompt = payload.user_prompt
 
+    # ── Video generation (async, Veo) ──────────────────────────────────────────
+    if payload.mode == GenerationMode.VIDEO:
+        vp = payload.effective_video_params()
+
+        video = await create_video(
+            brand_id=payload.brand_id,
+            user_prompt=payload.user_prompt,
+            enhanced_prompt=final_prompt,
+        )
+        video_id = video["id"]
+
+        try:
+            operation_name, _ = await generate_branded_video(
+                user_prompt=final_prompt,
+                brand_references=brand.get("reference_images", []),
+                brand_instructions=brand_instructions,
+                video_params=vp,
+            )
+            await update_video_operation(video_id, operation_name)
+
+            return VideoGenerateResponse(
+                video_id=video_id,
+                video_ids=[video_id],
+                operation_id=operation_name,
+                status=VideoStatus.PROCESSING,
+                message="Video generation started. Poll /api/videos/{id} for status.",
+                mode=GenerationMode.VIDEO,
+            )
+
+        except Exception as e:
+            await update_video_failed(video_id, str(e))
+            raise HTTPException(status_code=502, detail=f"Veo API error: {e}")
+
+    # ── Image generation (sync, Imagen 3) ─────────────────────────────────────
+    elif payload.mode == GenerationMode.IMAGE:
+        ip = payload.effective_image_params()
+
+        try:
+            image_bytes_list = await generate_images(
+                prompt=final_prompt,
+                params=ip,
+                brand_instructions=brand_instructions,
+            )
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Imagen API error: {e}")
+
+        if not image_bytes_list:
+            raise HTTPException(status_code=502, detail="Imagen returned no images")
+
+        video_ids: List[str] = []
+        for i, img_bytes in enumerate(image_bytes_list):
+            # Create a DB record for each image (reuses the videos table)
+            record = await create_video(
+                brand_id=payload.brand_id,
+                user_prompt=payload.user_prompt,
+                enhanced_prompt=final_prompt,
+            )
+            record_id = record["id"]
+
+            # Upload image to GCS and generate a signed HTTPS URL for the frontend
+            try:
+                blob_name = f"generated/images/{record_id}/image.jpg"
+                upload_file(
+                    file_bytes=img_bytes,
+                    content_type="image/jpeg",
+                    folder=f"generated/images/{record_id}",
+                    filename="image.jpg",
+                )
+                image_url = generate_signed_url(blob_name)
+                await update_video_completed(record_id, video_url=image_url)
+            except Exception as e:
+                logger.error(f"Failed to upload image {i} for record {record_id}: {e}")
+                await update_video_failed(record_id, f"Upload failed: {e}")
+
+            video_ids.append(record_id)
+
+        primary_id = video_ids[0] if video_ids else ""
         return VideoGenerateResponse(
-            video_id=video_id,
-            operation_id=operation_name,
-            status=VideoStatus.PROCESSING,
-            message="Video generation started. Poll /api/videos/{id} for status.",
+            video_id=primary_id,
+            video_ids=video_ids,
+            operation_id=None,
+            status=VideoStatus.COMPLETED,
+            message=f"{len(video_ids)} image(s) generated successfully.",
+            mode=GenerationMode.IMAGE,
         )
 
-    except Exception as e:
-        from .database import update_video_failed
-        await update_video_failed(video_id, str(e))
-        raise HTTPException(status_code=502, detail=f"Veo API error: {e}")
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown generation mode: {payload.mode}")
 
+
+# ── Legacy video endpoint (backward compatibility) ─────────────────────────────
+
+@app.post("/api/videos/generate", response_model=VideoGenerateResponse, status_code=202)
+async def generate_video_endpoint(payload: VideoGenerateRequest):
+    """
+    Legacy video generation endpoint. Wraps the new /api/generate endpoint.
+    Kept for backward compatibility.
+    """
+    return await generate_endpoint(
+        GenerateRequest(
+            brand_id=payload.brand_id,
+            mode=GenerationMode.VIDEO,
+            user_prompt=payload.user_prompt,
+            enhance_prompt=True,
+            additional_instructions=payload.additional_instructions,
+        )
+    )
+
+
+# ── Asset/video retrieval ──────────────────────────────────────────────────────
 
 @app.get("/api/videos/{video_id}", response_model=VideoResponse)
 async def get_video_endpoint(video_id: str):
     video = await get_video(video_id)
     if not video:
-        raise HTTPException(status_code=404, detail="Video not found")
+        raise HTTPException(status_code=404, detail="Asset not found")
     return VideoResponse(**video)
 
 

@@ -1,10 +1,11 @@
 """
-Google Veo 3.1 Video Generation Client
+Google Veo Video Generation Client
 
 Handles:
 - Initiating video generation (returns an operation name)
 - Polling operation status
 - Extracting the final video URI
+- Building style-hint suffixes from VideoParams
 """
 import asyncio
 import logging
@@ -13,6 +14,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from google import genai
 from google.genai import types as genai_types
 from .config import settings
+from .models import VideoParams, CameraMovement, MotionStrength, LightingStyle, VisualStyle, Quality
 
 logger = logging.getLogger(__name__)
 
@@ -26,43 +28,116 @@ def get_veo_client() -> genai.Client:
     return _veo_client
 
 
+# ── Style hint builder ─────────────────────────────────────────────────────────
+
+# Human-readable descriptors that Veo understands as natural language prompt text
+_CAMERA_MOVEMENT_PHRASES: Dict[str, str] = {
+    CameraMovement.STATIC:        "static camera, locked-off shot",
+    CameraMovement.SLOW_PAN:      "slow panning camera movement",
+    CameraMovement.DOLLY_IN:      "smooth dolly-in camera movement toward the subject",
+    CameraMovement.DOLLY_OUT:     "slow dolly-out pulling away from the subject",
+    CameraMovement.CRANE:         "graceful crane shot sweeping up or down",
+    CameraMovement.ORBIT:         "circular orbit camera slowly revolving around the subject",
+    CameraMovement.HANDHELD:      "intimate handheld camera with slight natural shake",
+    CameraMovement.EPIC_TRACKING: "epic tracking shot following the action",
+}
+
+_MOTION_STRENGTH_PHRASES: Dict[str, str] = {
+    MotionStrength.SUBTLE:  "subtle, gentle motion",
+    MotionStrength.MEDIUM:  "natural, fluid motion",
+    MotionStrength.DYNAMIC: "dynamic, energetic motion",
+    MotionStrength.EPIC:    "epic, powerful sweeping motion with high kinetic energy",
+}
+
+_LIGHTING_PHRASES: Dict[str, str] = {
+    LightingStyle.GOLDEN_HOUR:  "warm golden-hour lighting, long shadows, orange-amber tones",
+    LightingStyle.DRAMATIC:     "dramatic high-contrast lighting with deep shadows",
+    LightingStyle.SOFT_NATURAL: "soft, diffused natural daylight",
+    LightingStyle.STUDIO:       "clean professional studio lighting, neutral, controlled",
+    LightingStyle.NEON:         "vibrant neon-lit atmosphere, colourful urban glow",
+}
+
+_VISUAL_STYLE_PHRASES: Dict[str, str] = {
+    VisualStyle.PHOTOREALISTIC: "photorealistic, ultra-detailed, true-to-life",
+    VisualStyle.CINEMATIC:      "cinematic film quality, anamorphic lens look, movie-grade grade",
+    VisualStyle.ARTISTIC:       "artistic, painterly aesthetic, expressive composition",
+    VisualStyle.COMMERCIAL:     "polished commercial production quality, brand-safe",
+    VisualStyle.ANIME:          "anime-style animation, vibrant colours, fluid movement",
+}
+
+_QUALITY_PHRASES: Dict[str, str] = {
+    Quality.STANDARD: "",
+    Quality.HIGH:     "high quality, sharp detail, professional grade",
+    Quality.ULTRA:    "ultra high quality, 4K cinematic, crystal-clear detail, masterpiece",
+}
+
+
+def build_style_suffix(params: VideoParams) -> str:
+    """
+    Convert VideoParams into a natural-language suffix that is appended to
+    the cinematic prompt before sending to Veo. All style choices become
+    prompt-level hints since the Veo API itself only exposes aspect_ratio,
+    duration, and number_of_videos as config knobs.
+    """
+    parts = [
+        _CAMERA_MOVEMENT_PHRASES.get(params.camera_movement, ""),
+        _MOTION_STRENGTH_PHRASES.get(params.motion_strength, ""),
+        _LIGHTING_PHRASES.get(params.lighting_style, ""),
+        _VISUAL_STYLE_PHRASES.get(params.visual_style, ""),
+        _QUALITY_PHRASES.get(params.quality, ""),
+    ]
+    if params.negative_prompt:
+        parts.append(f"Avoid: {params.negative_prompt}")
+
+    return ", ".join(p for p in parts if p)
+
+
+# ── Video generation ───────────────────────────────────────────────────────────
+
 async def generate_branded_video(
     user_prompt: str,
     brand_references: Optional[List[str]] = None,
     brand_instructions: Optional[str] = None,
-    aspect_ratio: str = "16:9",
-    duration_seconds: int = 8,
+    video_params: Optional[VideoParams] = None,
 ) -> Tuple[str, str]:
     """
-    Initiate video generation with Veo 3.1.
+    Initiate video generation with Veo.
 
     Args:
-        user_prompt: The (already enhanced) cinematic prompt.
-        brand_references: List of up to 3 GCS image URIs for visual reference.
+        user_prompt:        The (already enhanced) cinematic prompt.
+        brand_references:   List of up to 3 GCS image URIs for visual reference.
         brand_instructions: Additional style instructions prepended to the prompt.
-        aspect_ratio: "16:9" (default) or "9:16".
-        duration_seconds: Target duration (Veo honours this as a hint).
+        video_params:       Tunable generation parameters (defaults if None).
 
     Returns:
-        (operation_name, enhanced_prompt_used)
+        (operation_name, final_prompt_used)
     """
     client = get_veo_client()
+    params = video_params or VideoParams()
 
-    # Optionally prepend brand instructions to the prompt
-    final_prompt = user_prompt
+    # Build the final prompt: brand context → user prompt → style hints
+    segments = []
     if brand_instructions:
-        final_prompt = f"[Brand Style: {brand_instructions}]\n\n{user_prompt}"
+        segments.append(f"[Brand Style: {brand_instructions}]")
+    segments.append(user_prompt)
+    style_suffix = build_style_suffix(params)
+    if style_suffix:
+        segments.append(style_suffix)
+    final_prompt = "\n\n".join(segments)
 
-    logger.info(f"Starting Veo generation | model={settings.VEO_MODEL} | prompt={final_prompt[:80]}…")
-
-    # Build the video generation config
-    video_config = genai_types.GenerateVideosConfig(
-        aspect_ratio=aspect_ratio,
-        number_of_videos=1,
-        duration_seconds=duration_seconds,
+    logger.info(
+        f"Starting Veo generation | model={settings.VEO_MODEL} "
+        f"| duration={params.duration}s | aspect={params.aspect_ratio.value} "
+        f"| prompt={final_prompt[:80]}…"
     )
 
-    # Use the first reference image for image-conditioned generation if provided
+    video_config = genai_types.GenerateVideosConfig(
+        aspect_ratio=params.aspect_ratio.value,
+        number_of_videos=1,
+        duration_seconds=params.duration,
+    )
+
+    # Image-conditioned generation: use first brand reference if available
     image_param = None
     if brand_references:
         first_ref = brand_references[0]
@@ -95,15 +170,17 @@ async def generate_branded_video(
         raise
 
 
+# ── Operation polling ──────────────────────────────────────────────────────────
+
 async def poll_operation(operation_name: str) -> Dict[str, Any]:
     """
     Poll a Veo operation and return its current state.
 
     Returns dict with keys:
-        done: bool
-        video_uri: str | None   (GCS URI, available when done=True)
+        done:        bool
+        video_uri:   str | None   (GCS URI, available when done=True)
         video_bytes: bytes | None (raw bytes if no GCS URI)
-        error: str | None
+        error:       str | None
     """
     client = get_veo_client()
     try:
@@ -117,36 +194,31 @@ async def poll_operation(operation_name: str) -> Dict[str, Any]:
         }
 
         if operation.done:
-            logger.info(f"Operation done. Attrs: { {k: str(getattr(operation, k, None))[:120] for k in ['error', 'result', 'response', 'metadata']} }")
+            logger.info(
+                f"Operation done. Attrs: { {k: str(getattr(operation, k, None))[:120] for k in ['error', 'result', 'response', 'metadata']} }"
+            )
             if hasattr(operation, "error") and operation.error:
                 result["error"] = str(operation.error)
             else:
-                # SDK exposes the Python result object in .result, raw dict in .response
-                # Always prefer .result since it has typed attributes like generated_videos
                 raw_result = getattr(operation, "result", None) or getattr(operation, "response", None)
                 if raw_result:
                     generated = getattr(raw_result, "generated_videos", None)
                     logger.info(f"generated_videos: {generated}")
 
-                # Check for RAI filtering even when generated_videos is None
                 rai_filtered = getattr(raw_result, "rai_media_filtered_count", 0) or 0
-                rai_reasons = getattr(raw_result, "rai_media_filtered_reasons", None)
+                rai_reasons  = getattr(raw_result, "rai_media_filtered_reasons", None)
                 if rai_filtered and not generated:
-                    reason_str = ""
-                    if rai_reasons:
-                        reason_str = f": {rai_reasons[0]}" if rai_reasons else ""
+                    reason_str = f": {rai_reasons[0]}" if rai_reasons else ""
                     result["error"] = (
                         f"Video blocked by Google's safety filters (RAI){reason_str}. "
                         "Try rephrasing your prompt to avoid specific people, violence, or other restricted content."
                     )
                 elif raw_result and generated:
                     video = generated[0]
-                    # Try direct gcs_uri first
                     if hasattr(video, "gcs_uri") and video.gcs_uri:
                         result["video_uri"] = video.gcs_uri
                     elif hasattr(video, "video") and video.video:
                         inner = video.video
-                        # video.video is a Video object with a uri, or raw bytes/base64
                         if hasattr(inner, "uri") and inner.uri:
                             result["video_uri"] = inner.uri
                         elif isinstance(inner, str):

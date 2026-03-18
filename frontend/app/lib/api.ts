@@ -1,8 +1,11 @@
 const API_BASE = "";
 
-// ── Types ──────────────────────────────────────────────────────────────────────
+// ── Status & mode types ─────────────────────────────────────────────────────────
 
 export type VideoStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+export type GenerationMode = "video" | "image";
+
+// ── Brand ───────────────────────────────────────────────────────────────────────
 
 export interface Brand {
   id: string;
@@ -11,6 +14,8 @@ export interface Brand {
   reference_images: string[];
   created_at: string;
 }
+
+// ── Video / Asset ───────────────────────────────────────────────────────────────
 
 export interface Video {
   id: string;
@@ -25,19 +30,116 @@ export interface Video {
   updated_at: string;
 }
 
+// ── Generation parameter types ──────────────────────────────────────────────────
+
+export type AspectRatio = "16:9" | "9:16" | "1:1" | "21:9" | "4:3";
+export type Quality = "standard" | "high" | "ultra";
+
+export type CameraMovement =
+  | "static"
+  | "slow_pan"
+  | "dolly_in"
+  | "dolly_out"
+  | "crane"
+  | "orbit"
+  | "handheld"
+  | "epic_tracking";
+
+export type MotionStrength = "subtle" | "medium" | "dynamic" | "epic";
+
+export type LightingStyle =
+  | "golden_hour"
+  | "dramatic"
+  | "soft_natural"
+  | "studio"
+  | "neon";
+
+export type VisualStyle =
+  | "photorealistic"
+  | "cinematic"
+  | "artistic"
+  | "commercial"
+  | "anime";
+
+export type ImageStyle =
+  | "photorealistic"
+  | "cinematic"
+  | "artistic"
+  | "commercial"
+  | "anime"
+  | "illustration"
+  | "3d_render";
+
+export interface VideoParams {
+  duration: 5 | 8 | 10;
+  aspect_ratio: AspectRatio;
+  camera_movement: CameraMovement;
+  motion_strength: MotionStrength;
+  lighting_style: LightingStyle;
+  visual_style: VisualStyle;
+  quality: Quality;
+  seed?: number | null;
+  negative_prompt?: string | null;
+}
+
+export interface ImageParams {
+  aspect_ratio: AspectRatio;
+  style: ImageStyle;
+  quality: Quality;
+  number_of_images: 1 | 2 | 3 | 4;
+  seed?: number | null;
+  negative_prompt?: string | null;
+}
+
+// ── Unified generation request ──────────────────────────────────────────────────
+
+export interface GenerateRequest {
+  brand_id: string;
+  mode: GenerationMode;
+  user_prompt: string;
+  enhance_prompt: boolean;
+  additional_instructions?: string;
+  video_params?: VideoParams;
+  image_params?: ImageParams;
+}
+
+// ── Responses ───────────────────────────────────────────────────────────────────
+
 export interface GenerateResponse {
   video_id: string;
+  video_ids: string[];
   operation_id: string | null;
   status: VideoStatus;
   message: string;
+  mode: GenerationMode;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Default parameter values ────────────────────────────────────────────────────
 
-async function apiFetch<T>(
-  path: string,
-  init?: RequestInit,
-): Promise<T> {
+export const DEFAULT_VIDEO_PARAMS: VideoParams = {
+  duration: 8,
+  aspect_ratio: "16:9",
+  camera_movement: "static",
+  motion_strength: "medium",
+  lighting_style: "soft_natural",
+  visual_style: "cinematic",
+  quality: "high",
+  seed: null,
+  negative_prompt: null,
+};
+
+export const DEFAULT_IMAGE_PARAMS: ImageParams = {
+  aspect_ratio: "16:9",
+  style: "photorealistic",
+  quality: "high",
+  number_of_images: 1,
+  seed: null,
+  negative_prompt: null,
+};
+
+// ── Helpers ─────────────────────────────────────────────────────────────────────
+
+async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...init?.headers },
     ...init,
@@ -49,12 +151,9 @@ async function apiFetch<T>(
   return res.json() as Promise<T>;
 }
 
-// ── Brand API ──────────────────────────────────────────────────────────────────
+// ── Brand API ────────────────────────────────────────────────────────────────────
 
-export async function createBrand(
-  name: string,
-  styleGuide?: string,
-): Promise<Brand> {
+export async function createBrand(name: string, styleGuide?: string): Promise<Brand> {
   return apiFetch<Brand>("/api/brands", {
     method: "POST",
     body: JSON.stringify({ name, style_guide: styleGuide }),
@@ -86,22 +185,33 @@ export async function uploadBrandImages(
   return res.json();
 }
 
-// ── Video API ──────────────────────────────────────────────────────────────────
+// ── Generation API ───────────────────────────────────────────────────────────────
 
+/** Unified generation endpoint — handles both video and image modes. */
+export async function generateAsset(req: GenerateRequest): Promise<GenerateResponse> {
+  return apiFetch<GenerateResponse>("/api/generate", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
+/** Legacy shim — delegates to generateAsset for backward compatibility. */
 export async function generateVideo(
   brandId: string,
   userPrompt: string,
   additionalInstructions?: string,
 ): Promise<GenerateResponse> {
-  return apiFetch<GenerateResponse>("/api/videos/generate", {
-    method: "POST",
-    body: JSON.stringify({
-      brand_id: brandId,
-      user_prompt: userPrompt,
-      additional_instructions: additionalInstructions,
-    }),
+  return generateAsset({
+    brand_id: brandId,
+    mode: "video",
+    user_prompt: userPrompt,
+    enhance_prompt: true,
+    additional_instructions: additionalInstructions,
+    video_params: DEFAULT_VIDEO_PARAMS,
   });
 }
+
+// ── Asset retrieval ──────────────────────────────────────────────────────────────
 
 export async function getVideo(videoId: string): Promise<Video> {
   return apiFetch<Video>(`/api/videos/${videoId}`);
@@ -113,7 +223,7 @@ export async function listVideos(brandId?: string, limit = 20): Promise<Video[]>
   return apiFetch<Video[]>(`/api/videos?${params}`);
 }
 
-// ── Polling helper ─────────────────────────────────────────────────────────────
+// ── Polling helper ───────────────────────────────────────────────────────────────
 
 export async function pollUntilDone(
   videoId: string,
