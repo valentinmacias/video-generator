@@ -24,7 +24,12 @@ def get_runway_client():
                 "Add it to your .env file to use Runway models."
             )
         from runwayml import RunwayML
-        _client = RunwayML(api_key=settings.RUNWAYML_API_SECRET)
+        base = settings.RUNWAY_API_BASE_URL.rstrip("/")
+        _client = RunwayML(api_key=settings.RUNWAYML_API_SECRET, base_url=base)
+        logger.info(
+            f"=== PRODUCTION RUNWAY Gen-4 Turbo - Credits WILL be deducted ==="
+            f" (base_url={base})"
+        )
     return _client
 
 
@@ -199,7 +204,7 @@ async def poll_runway_task(operation_name: str) -> dict:
 
 # ── Runway Characters API (enterprise) ────────────────────────────────────────
 
-_RUNWAY_API_BASE = "https://api.runwayml.com/v1"
+_RUNWAY_API_BASE = f"{settings.RUNWAY_API_BASE_URL.rstrip('/')}/v1"
 _RUNWAY_HEADERS  = lambda: {
     "Authorization": f"Bearer {settings.RUNWAYML_API_SECRET}",
     "Content-Type":  "application/json",

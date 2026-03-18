@@ -187,13 +187,26 @@ async def generate_endpoint(payload: GenerateRequest):
         )
         video_id = video["id"]
 
-        # ── STRICT provider routing — NO fallback between providers ───────────
+        # ── HARD provider routing — exactly one provider, zero fallback ─────────
+        provider = payload.model_provider  # captured now; never mutated below
+        logger.info(
+            f">>> ROUTING REQUEST [video={video_id}]"
+            f" provider={provider!r} prompt={final_prompt[:60]!r}…"
+        )
+
         try:
-            if payload.model_provider == "runway":
+            if provider == "runway":
+                # ============================================================
+                # HARD BLOCK: Runway selected — Veo is DISABLED for this request
+                # ============================================================
+                logger.info(
+                    f"=== HARD BLOCK: Runway selected — Veo is DISABLED ==="
+                    f" [video={video_id}]"
+                )
                 rp = payload.effective_runway_params()
                 logger.info(
-                    f"=== STRICT ROUTING: Using Runway Gen-4 Turbo ==="
-                    f" [video={video_id}]"
+                    f"=== PRODUCTION RUNWAY {rp.runway_model.value.upper()}"
+                    f" — Credits WILL be deducted === [video={video_id}]"
                 )
                 operation_name, _ = await generate_runway_video(
                     prompt=final_prompt,
@@ -203,12 +216,9 @@ async def generate_endpoint(payload: GenerateRequest):
                 )
                 provider_label = f"Runway {rp.runway_model.value}"
 
-            elif payload.model_provider == "kling":
+            elif provider == "kling":
+                logger.info(f"=== HARD BLOCK: Kling selected === [video={video_id}]")
                 kp = payload.effective_kling_params()
-                logger.info(
-                    f"=== STRICT ROUTING: Using Kling ==="
-                    f" [video={video_id}]"
-                )
                 operation_name, _ = await generate_kling_video(
                     prompt=final_prompt,
                     kling_model=kp.kling_model,
@@ -222,12 +232,9 @@ async def generate_endpoint(payload: GenerateRequest):
                 )
                 provider_label = "Kling"
 
-            elif payload.model_provider == "veo":
+            elif provider == "veo":
+                logger.info(f"=== HARD BLOCK: Veo selected === [video={video_id}]")
                 vp = payload.effective_video_params()
-                logger.info(
-                    f"=== STRICT ROUTING: Using Google Veo ==="
-                    f" [video={video_id}]"
-                )
                 operation_name, _ = await generate_branded_video(
                     user_prompt=final_prompt,
                     brand_references=brand.get("reference_images", []),
@@ -237,17 +244,16 @@ async def generate_endpoint(payload: GenerateRequest):
                 provider_label = "Veo"
 
             else:
-                # Unknown provider — refuse rather than silently route anywhere
-                await update_video_failed(video_id, f"Unknown model_provider: {payload.model_provider!r}")
+                await update_video_failed(video_id, f"Unknown model_provider: {provider!r}")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Unknown model_provider {payload.model_provider!r}. Use 'runway', 'veo', or 'kling'.",
+                    detail=f"Unknown model_provider {provider!r}. Use 'runway', 'veo', or 'kling'.",
                 )
 
             await update_video_operation(video_id, operation_name)
             logger.info(
-                f"[video={video_id}] Submitted to {provider_label}"
-                f" | operation={operation_name}"
+                f">>> SUBMITTED [video={video_id}]"
+                f" provider={provider_label!r} operation={operation_name}"
             )
 
             return VideoGenerateResponse(
@@ -261,16 +267,16 @@ async def generate_endpoint(payload: GenerateRequest):
             )
 
         except HTTPException:
-            raise  # re-raise 400/503 from above without wrapping
+            raise  # never swallow 400/503 in the generic handler below
         except Exception as e:
             await update_video_failed(video_id, str(e))
             logger.error(
-                f"[video={video_id}] {payload.model_provider} API error: {e}",
+                f">>> FAILED [video={video_id}] provider={provider!r} error={e}",
                 exc_info=True,
             )
             raise HTTPException(
                 status_code=502,
-                detail=f"{payload.model_provider.capitalize()} API error: {e}",
+                detail=f"{provider.capitalize()} API error: {e}",
             )
 
     # ── Image generation (sync, Imagen 3) ─────────────────────────────────────

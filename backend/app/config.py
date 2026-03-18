@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     # Runway ML
     RUNWAYML_API_SECRET: Optional[str] = None
+    RUNWAY_API_BASE_URL: str = "https://api.runwayml.com"  # never use the dev/sandbox endpoint
 
     # Kling AI (legacy fallback)
     KLING_ACCESS_KEY: Optional[str] = None
