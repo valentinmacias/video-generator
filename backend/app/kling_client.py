@@ -19,6 +19,33 @@ from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
+_RETRY_DELAYS = [2, 4, 8, 16]  # seconds between retries on 429
+
+
+async def _post_with_retry(url: str, json_body: Dict, headers: Dict) -> Dict:
+    """POST with exponential backoff on 429 rate-limit responses."""
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt, delay in enumerate([0] + _RETRY_DELAYS):
+        if delay:
+            logger.warning(f"Kling 429 rate limit — retrying in {delay}s (attempt {attempt + 1})")
+            await asyncio.sleep(delay)
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.post(url, json=json_body, headers=headers)
+                if resp.status_code == 429:
+                    last_exc = httpx.HTTPStatusError(
+                        f"429 Too Many Requests", request=resp.request, response=resp
+                    )
+                    continue
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429:
+                last_exc = e
+                continue
+            raise
+    raise last_exc
+
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -153,10 +180,7 @@ async def generate_kling_video(
         f"| mode={gen_mode} | duration={dur_str}s | prompt={prompt[:80]}…"
     )
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(endpoint, json=body, headers=_auth_headers())
-        resp.raise_for_status()
-        data = resp.json()
+    data = await _post_with_retry(endpoint, body, _auth_headers())
 
     if data.get("code") != 0:
         raise RuntimeError(
