@@ -33,12 +33,24 @@ export interface Video {
   updated_at:      string;
 }
 
-// ── Generation parameter types ──────────────────────────────────────────────────
+// ── Model provider ──────────────────────────────────────────────────────────────
+
+export type ModelProvider = "runway" | "veo" | "kling";
+
+// ── Runway models ───────────────────────────────────────────────────────────────
+
+export type RunwayModel =
+  | "gen4_turbo"   // Runway Gen-4 Turbo (primary, fastest)
+  | "gen4_5";      // Runway Gen-4.5 (custom training, highest quality)
+
+// ── Veo models ──────────────────────────────────────────────────────────────────
 
 export type VeoModel =
   | "veo-2.0-generate-001"
   | "veo-3.0-generate-preview"
   | "veo-3.1-generate-preview";
+
+// ── Shared enums ────────────────────────────────────────────────────────────────
 
 export type AspectRatio = "16:9" | "9:16" | "1:1" | "21:9" | "4:3";
 export type Quality     = "standard" | "high" | "ultra";
@@ -80,6 +92,25 @@ export type ImageStyle =
   | "illustration"
   | "3d_render";
 
+// ── Runway params ───────────────────────────────────────────────────────────────
+
+export interface RunwayParams {
+  runway_model:           RunwayModel;
+  duration:               5 | 10;
+  aspect_ratio:           AspectRatio;
+  motion_strength:        MotionStrength;
+  camera_movement:        CameraMovement;
+  lighting_style:         LightingStyle;
+  visual_style:           VisualStyle;
+  quality:                Quality;
+  seed?:                  number | null;
+  negative_prompt?:       string | null;
+  conditioning_image_b64?: string | null;
+  reference_images_b64?:  string[] | null;
+}
+
+// ── Veo params ──────────────────────────────────────────────────────────────────
+
 export interface VideoParams {
   veo_model:            VeoModel;
   duration:             5 | 8 | 10;
@@ -91,11 +122,12 @@ export interface VideoParams {
   quality:              Quality;
   seed?:                number | null;
   negative_prompt?:     string | null;
-  // Reference media (base64-encoded, inline)
   reference_images_b64?: string[] | null;
   start_card_b64?:       string | null;
   end_card_b64?:         string | null;
 }
+
+// ── Image params ────────────────────────────────────────────────────────────────
 
 export interface ImageParams {
   aspect_ratio:     AspectRatio;
@@ -106,33 +138,32 @@ export interface ImageParams {
   negative_prompt?: string | null;
 }
 
-// ── Kling params ─────────────────────────────────────────────────────────────────
-
-export type ModelProvider = "veo" | "kling";
+// ── Kling params (legacy) ───────────────────────────────────────────────────────
 
 export interface KlingParams {
-  kling_model:             string;       // "kling-3.0" | "kling-2.1" | …
+  kling_model:             string;
   duration:                5 | 10;
   aspect_ratio:            AspectRatio;
-  cfg_scale:               number;       // 0.0 – 1.0  (subject/prompt adherence)
-  motion_intensity:        number;       // 0.0 – 1.0  (>0.5 enables pro mode)
+  cfg_scale:               number;
+  motion_intensity:        number;
   negative_prompt?:        string | null;
-  conditioning_image_b64?: string | null; // triggers image-to-video
-  reference_image_b64?:    string | null; // UGC subject reference
+  conditioning_image_b64?: string | null;
+  reference_image_b64?:    string | null;
 }
 
 // ── Unified generation request ──────────────────────────────────────────────────
 
 export interface GenerateRequest {
-  brand_id:                string | null;
-  mode:                    GenerationMode;
-  model_provider?:         ModelProvider;
-  user_prompt:             string;
-  enhance_prompt:          boolean;
+  brand_id:                 string | null;
+  mode:                     GenerationMode;
+  model_provider?:          ModelProvider;
+  user_prompt:              string;
+  enhance_prompt:           boolean;
   additional_instructions?: string;
-  video_params?:           VideoParams;
-  kling_params?:           KlingParams;
-  image_params?:           ImageParams;
+  runway_params?:           RunwayParams;
+  video_params?:            VideoParams;
+  kling_params?:            KlingParams;
+  image_params?:            ImageParams;
 }
 
 // ── Responses ───────────────────────────────────────────────────────────────────
@@ -144,15 +175,69 @@ export interface GenerateResponse {
   status:       VideoStatus;
   message:      string;
   mode:         GenerationMode;
-  // Image generation results (populated when mode === "image")
   image_url?:   string | null;
   image_urls?:  string[];
 }
 
-// ── Default parameter values ────────────────────────────────────────────────────
+// ── Avatar / AI Creator types ────────────────────────────────────────────────────
+
+export type AvatarStatus = "TRAINING" | "READY" | "FAILED";
+
+export interface Avatar {
+  id:                  string;
+  name:                string;
+  description?:        string | null;
+  image_url?:          string | null;
+  status:              AvatarStatus;
+  training_progress:   number;
+  model_provider:      string;
+  character_id?:       string | null;
+  custom_model_id?:    string | null;
+  training_job_id?:    string | null;
+  voice_clone_enabled: boolean;
+  product_locked:      boolean;
+  tags:                string[];
+  gender?:             string | null;
+  age?:                string | null;
+  gesture?:            string | null;
+  background?:         string | null;
+  is_custom:           boolean;
+  created_at:          string;
+}
+
+export interface TrainCreatorPayload {
+  name:                string;
+  description:         string;
+  voice_clone_enabled: boolean;
+  product_locked:      boolean;
+  files:               File[];
+}
+
+export interface TrainCreatorResponse {
+  avatar_id:       string;
+  training_job_id: string;
+  message:         string;
+}
+
+// ── Default parameter values ─────────────────────────────────────────────────────
+
+export const DEFAULT_RUNWAY_PARAMS: RunwayParams = {
+  runway_model:           "gen4_turbo",
+  duration:               5,
+  aspect_ratio:           "16:9",
+  motion_strength:        "medium",
+  camera_movement:        "static",
+  lighting_style:         "soft_natural",
+  visual_style:           "cinematic",
+  quality:                "high",
+  seed:                   null,
+  negative_prompt:        null,
+  conditioning_image_b64: null,
+  reference_images_b64:   null,
+};
 
 export const DEFAULT_VIDEO_PARAMS: VideoParams = {
-  veo_model:       "veo-2.0-generate-001",
+  veo_model:       "veo-3.1-generate-preview",
   duration:        8,
   aspect_ratio:    "16:9",
   camera_movement: "static",
@@ -237,7 +322,6 @@ export async function uploadBrandImages(
 
 // ── Generation API ───────────────────────────────────────────────────────────────
 
-/** Unified generation endpoint — handles both video and image modes. */
 export async function generateAsset(req: GenerateRequest): Promise<GenerateResponse> {
   return apiFetch<GenerateResponse>("/api/generate", {
     method: "POST",
@@ -245,7 +329,6 @@ export async function generateAsset(req: GenerateRequest): Promise<GenerateRespo
   });
 }
 
-/** Legacy shim — delegates to generateAsset for backward compatibility. */
 export async function generateVideo(
   brandId: string,
   userPrompt: string,
@@ -254,10 +337,11 @@ export async function generateVideo(
   return generateAsset({
     brand_id:    brandId,
     mode:        "video",
+    model_provider: "runway",
     user_prompt: userPrompt,
     enhance_prompt: true,
     additional_instructions: additionalInstructions,
-    video_params: DEFAULT_VIDEO_PARAMS,
+    runway_params: DEFAULT_RUNWAY_PARAMS,
   });
 }
 
@@ -279,7 +363,7 @@ export async function pollUntilDone(
   videoId: string,
   onUpdate: (video: Video) => void,
   intervalMs = 5000,
-  maxAttempts = 72, // 6 min max
+  maxAttempts = 72,
 ): Promise<Video> {
   return new Promise((resolve, reject) => {
     let attempts = 0;
@@ -302,15 +386,44 @@ export async function pollUntilDone(
   });
 }
 
+// ── Avatar / AI Creator API ──────────────────────────────────────────────────────
+
+export async function listAvatars(): Promise<Avatar[]> {
+  return apiFetch<Avatar[]>("/api/avatars");
+}
+
+export async function getAvatarStatus(avatarId: string): Promise<Avatar> {
+  return apiFetch<Avatar>(`/api/avatars/${avatarId}`);
+}
+
+export async function trainAiCreator(
+  payload: TrainCreatorPayload,
+): Promise<TrainCreatorResponse> {
+  const form = new FormData();
+  form.append("name",                payload.name);
+  form.append("description",         payload.description);
+  form.append("voice_clone_enabled", String(payload.voice_clone_enabled));
+  form.append("product_locked",      String(payload.product_locked));
+  payload.files.forEach((f) => form.append("files", f));
+
+  const res = await fetch(`${API_BASE}/api/train-ai-creator`, {
+    method: "POST",
+    body:   form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? `Training error ${res.status}`);
+  }
+  return res.json();
+}
+
 // ── File helpers ─────────────────────────────────────────────────────────────────
 
-/** Read a File as a base64 data string (strips the data: prefix). */
 export async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload  = () => {
       const result = reader.result as string;
-      // Strip "data:<mime>;base64," prefix — send only the raw base64 payload
       resolve(result.split(",")[1]);
     };
     reader.onerror = () => reject(new Error("Failed to read file"));

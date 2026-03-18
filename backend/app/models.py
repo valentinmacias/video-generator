@@ -44,6 +44,21 @@ class VeoModel(str, Enum):
     VEO_3_1 = "veo-3.1-generate-preview"
 
 
+# ── Runway model selector ──────────────────────────────────────────────────────
+
+class RunwayModel(str, Enum):
+    GEN4_TURBO = "gen4_turbo"   # Runway Gen-4 Turbo (primary)
+    GEN4_5     = "gen4_5"       # Runway Gen-4.5 (custom training)
+
+
+# ── Avatar status ──────────────────────────────────────────────────────────────
+
+class AvatarStatus(str, Enum):
+    TRAINING = "TRAINING"
+    READY    = "READY"
+    FAILED   = "FAILED"
+
+
 # ── Video-specific enums ───────────────────────────────────────────────────────
 
 class CameraMovement(str, Enum):
@@ -134,6 +149,24 @@ class ImageParams(BaseModel):
     negative_prompt:  Optional[str] = Field(None, max_length=500)
 
 
+# ── Runway parameter model ────────────────────────────────────────────────────
+
+class RunwayParams(BaseModel):
+    """Tunable parameters for Runway Gen-4 Turbo / Gen-4.5 video generation."""
+    runway_model:           RunwayModel    = RunwayModel.GEN4_TURBO
+    duration:               Literal[5, 10] = 5
+    aspect_ratio:           AspectRatio    = AspectRatio.WIDE
+    motion_strength:        MotionStrength = MotionStrength.MEDIUM
+    camera_movement:        CameraMovement = CameraMovement.STATIC
+    lighting_style:         LightingStyle  = LightingStyle.SOFT_NATURAL
+    visual_style:           VisualStyle    = VisualStyle.CINEMATIC
+    quality:                Quality        = Quality.HIGH
+    seed:                   Optional[int]  = None
+    negative_prompt:        Optional[str]  = Field(None, max_length=500)
+    conditioning_image_b64: Optional[str]  = Field(None, description="First-frame image (base64)")
+    reference_images_b64:   Optional[List[str]] = Field(None, description="Reference images (base64)")
+
+
 # ── Kling parameter model ──────────────────────────────────────────────────────
 
 class KlingParams(BaseModel):
@@ -164,13 +197,17 @@ class GenerateRequest(BaseModel):
     """
     brand_id:                Optional[str] = None
     mode:                    GenerationMode = GenerationMode.VIDEO
-    model_provider:          Literal["veo", "kling"] = "veo"
+    model_provider:          Literal["runway", "veo", "kling"] = "runway"
     user_prompt:             str            = Field(..., min_length=10, max_length=1000)
     enhance_prompt:          bool           = True   # False = raw mode, skip Gemini
     additional_instructions: Optional[str]  = Field(None, max_length=500)
+    runway_params:           Optional[RunwayParams] = None
     video_params:            Optional[VideoParams]  = None
     kling_params:            Optional[KlingParams]  = None
     image_params:            Optional[ImageParams]  = None
+
+    def effective_runway_params(self) -> RunwayParams:
+        return self.runway_params or RunwayParams()
 
     def effective_video_params(self) -> VideoParams:
         return self.video_params or VideoParams()
@@ -245,3 +282,33 @@ class PromptEnhanceRequest(BaseModel):
 class PromptEnhanceResponse(BaseModel):
     enhanced_prompt: str
     original_prompt: str
+
+
+# ── Avatar / AI Creator schemas ────────────────────────────────────────────────
+
+class AvatarResponse(BaseModel):
+    id:                  str
+    name:                str
+    description:         Optional[str]  = None
+    image_url:           Optional[str]  = None
+    status:              AvatarStatus   = AvatarStatus.TRAINING
+    training_progress:   int            = 0
+    model_provider:      str            = "runway"
+    character_id:        Optional[str]  = None
+    custom_model_id:     Optional[str]  = None
+    training_job_id:     Optional[str]  = None
+    voice_clone_enabled: bool           = False
+    product_locked:      bool           = False
+    tags:                List[str]      = []
+    gender:              Optional[str]  = None
+    age:                 Optional[str]  = None
+    gesture:             Optional[str]  = None
+    background:          Optional[str]  = None
+    is_custom:           bool           = False
+    created_at:          datetime
+
+
+class TrainCreatorResponse(BaseModel):
+    avatar_id:       str
+    training_job_id: str
+    message:         str

@@ -130,3 +130,100 @@ async def get_processing_videos() -> List[Dict[str, Any]]:
         .execute()
     )
     return result.data
+
+
+# ── Avatar / AI Creator operations ────────────────────────────────────────────
+
+async def create_avatar(
+    name: str,
+    description: str = "",
+    voice_clone_enabled: bool = False,
+    product_locked: bool = False,
+) -> Dict[str, Any]:
+    db = get_supabase()
+    result = db.table("avatars").insert({
+        "name":                name,
+        "description":         description,
+        "status":              "TRAINING",
+        "training_progress":   0,
+        "model_provider":      "runway",
+        "voice_clone_enabled": voice_clone_enabled,
+        "product_locked":      product_locked,
+        "tags":                [],
+        "is_custom":           True,
+    }).execute()
+    return result.data[0]
+
+
+async def update_avatar_training(
+    avatar_id: str,
+    training_job_id: str,
+    character_id: Optional[str] = None,
+) -> None:
+    db = get_supabase()
+    payload: Dict[str, Any] = {
+        "training_job_id": training_job_id,
+        "status":          "TRAINING",
+        "updated_at":      datetime.now(timezone.utc).isoformat(),
+    }
+    if character_id:
+        payload["character_id"] = character_id
+    db.table("avatars").update(payload).eq("id", avatar_id).execute()
+
+
+async def update_avatar_progress(avatar_id: str, progress: int) -> None:
+    db = get_supabase()
+    db.table("avatars").update({
+        "training_progress": progress,
+        "updated_at":        datetime.now(timezone.utc).isoformat(),
+    }).eq("id", avatar_id).execute()
+
+
+async def update_avatar_ready(
+    avatar_id: str,
+    custom_model_id: str,
+    image_url: Optional[str] = None,
+) -> None:
+    db = get_supabase()
+    db.table("avatars").update({
+        "status":            "READY",
+        "training_progress": 100,
+        "custom_model_id":   custom_model_id,
+        "image_url":         image_url,
+        "updated_at":        datetime.now(timezone.utc).isoformat(),
+    }).eq("id", avatar_id).execute()
+    logger.info(f"Avatar {avatar_id} training COMPLETE: model={custom_model_id}")
+
+
+async def update_avatar_failed(avatar_id: str, error: str) -> None:
+    db = get_supabase()
+    db.table("avatars").update({
+        "status":    "FAILED",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", avatar_id).execute()
+    logger.error(f"Avatar {avatar_id} training FAILED: {error}")
+
+
+async def get_avatar(avatar_id: str) -> Optional[Dict[str, Any]]:
+    db = get_supabase()
+    result = db.table("avatars").select("*").eq("id", avatar_id).execute()
+    return result.data[0] if result.data else None
+
+
+async def list_avatars() -> List[Dict[str, Any]]:
+    db = get_supabase()
+    result = db.table("avatars").select("*").order("created_at", desc=True).execute()
+    return result.data
+
+
+async def get_training_avatars() -> List[Dict[str, Any]]:
+    """Fetch all avatars that are currently in training."""
+    db = get_supabase()
+    result = (
+        db.table("avatars")
+        .select("*")
+        .eq("status", "TRAINING")
+        .not_.is_("training_job_id", "null")
+        .execute()
+    )
+    return result.data

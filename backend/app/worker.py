@@ -12,6 +12,10 @@ from .database import (
     get_processing_videos,
     update_video_completed,
     update_video_failed,
+    get_training_avatars,
+    update_avatar_progress,
+    update_avatar_ready,
+    update_avatar_failed,
 )
 from .veo_client import poll_operation
 from .kling_client import poll_kling_task
@@ -28,7 +32,10 @@ async def _process_one_video(video: dict) -> None:
 
     logger.debug(f"Polling video {video_id} | operation={operation_name}")
     # Route to the correct poller based on operation prefix
-    if operation_name.startswith("kling:"):
+    if operation_name.startswith("runway:"):
+        from .runway_client import poll_runway_task
+        result = await poll_runway_task(operation_name)
+    elif operation_name.startswith("kling:"):
         result = await poll_kling_task(operation_name)
     else:
         result = await poll_operation(operation_name)
@@ -59,6 +66,33 @@ async def _process_one_video(video: dict) -> None:
         await update_video_failed(video_id, f"Storage error: {e}")
 
 
+async def _process_training_avatar(avatar: dict) -> None:
+    """Poll a Runway training job and update the avatar record."""
+    from .runway_client import get_training_progress
+    avatar_id       = avatar["id"]
+    training_job_id = avatar["training_job_id"]
+
+    # Skip placeholder job IDs created when Runway API wasn't available
+    if training_job_id.startswith("pending:"):
+        return
+
+    try:
+        prog = await get_training_progress(training_job_id)
+        status   = prog["status"]
+        progress = prog["progress"]
+
+        if status == "COMPLETED":
+            custom_model_id = prog.get("custom_model_id") or training_job_id
+            await update_avatar_ready(avatar_id, custom_model_id)
+        elif status == "FAILED":
+            await update_avatar_failed(avatar_id, "Runway training failed")
+        else:
+            await update_avatar_progress(avatar_id, progress)
+
+    except Exception as e:
+        logger.error(f"Failed to poll training avatar {avatar_id}: {e}")
+
+
 async def _polling_loop() -> None:
     """Main loop: poll every POLL_INTERVAL_SECONDS."""
     logger.info(
@@ -66,11 +100,20 @@ async def _polling_loop() -> None:
     )
     while True:
         try:
+            # Poll video generations
             processing = await get_processing_videos()
             if processing:
                 logger.info(f"Found {len(processing)} video(s) in PROCESSING state")
                 tasks = [_process_one_video(v) for v in processing]
                 await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Poll Runway training jobs
+            training = await get_training_avatars()
+            if training:
+                logger.info(f"Found {len(training)} avatar(s) in TRAINING state")
+                ttasks = [_process_training_avatar(a) for a in training]
+                await asyncio.gather(*ttasks, return_exceptions=True)
+
         except Exception as e:
             logger.error(f"Polling loop error: {e}", exc_info=True)
 

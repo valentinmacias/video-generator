@@ -13,15 +13,18 @@ from .models import (
     VideoGenerateRequest, VideoGenerateResponse, VideoResponse,
     GenerateRequest, GenerationMode,
     VideoStatus, PromptEnhanceRequest, PromptEnhanceResponse,
+    AvatarResponse, TrainCreatorResponse,
 )
 from .database import (
     create_brand, get_brand, list_brands, update_brand_images,
     create_video, update_video_operation, update_video_completed,
     update_video_failed, get_video, list_videos,
+    create_avatar, update_avatar_training, get_avatar, list_avatars,
 )
 from .gemini_client import enhance_prompt
 from .veo_client import generate_branded_video
 from .kling_client import generate_kling_video
+from .runway_client import generate_runway_video, create_runway_character, train_custom_model
 from .imagen_client import generate_images
 from .storage import upload_file, generate_signed_url
 from .worker import start_worker, stop_worker
@@ -178,7 +181,16 @@ async def generate_endpoint(payload: GenerateRequest):
         video_id = video["id"]
 
         try:
-            if payload.model_provider == "kling":
+            if payload.model_provider == "runway":
+                rp = payload.effective_runway_params()
+                operation_name, _ = await generate_runway_video(
+                    prompt=final_prompt,
+                    runway_params=rp,
+                    brand_references=brand.get("reference_images", []),
+                    brand_instructions=brand_instructions,
+                )
+                provider_label = f"Runway {rp.runway_model.value}"
+            elif payload.model_provider == "kling":
                 kp = payload.effective_kling_params()
                 operation_name, _ = await generate_kling_video(
                     prompt=final_prompt,
@@ -273,6 +285,105 @@ async def generate_endpoint(payload: GenerateRequest):
 
     else:
         raise HTTPException(status_code=400, detail=f"Unknown generation mode: {payload.mode}")
+
+
+# ── Avatar / AI Creator endpoints ─────────────────────────────────────────────
+
+@app.post("/api/train-ai-creator", response_model=TrainCreatorResponse, status_code=202)
+async def train_ai_creator_endpoint(
+    name:                str          = Form(...),
+    description:         str          = Form(""),
+    voice_clone_enabled: bool         = Form(False),
+    product_locked:      bool         = Form(False),
+    files: List[UploadFile]           = File(default=[]),
+):
+    """
+    Train a custom Runway Gen-4.5 AI creator from UGC clips.
+
+    Accepts:
+    - name, description (form fields)
+    - voice_clone_enabled, product_locked (toggles)
+    - files: training media (UGC clips, product images, audio)
+
+    Returns immediately with avatar_id. Poll /api/avatars/{avatar_id} for training progress.
+    """
+    if not settings.RUNWAYML_API_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="Runway API not configured. Add RUNWAYML_API_SECRET to your environment.",
+        )
+
+    # Create the avatar record immediately so user can poll progress
+    avatar = await create_avatar(
+        name=name,
+        description=description,
+        voice_clone_enabled=voice_clone_enabled,
+        product_locked=product_locked,
+    )
+    avatar_id = avatar["id"]
+
+    # Upload training data to GCS
+    training_data_url: Optional[str] = None
+    if files:
+        combined_bytes = b""
+        for f in files[:50]:  # Limit to 50 files per request
+            data = await f.read()
+            combined_bytes += data
+        if combined_bytes:
+            gcs_uri = upload_file(
+                file_bytes=combined_bytes,
+                content_type="application/octet-stream",
+                folder=f"training/{avatar_id}",
+                filename="training_data.bin",
+            )
+            # Convert gs:// URI to a signed HTTPS URL for Runway
+            blob_name = gcs_uri.replace(f"gs://{settings.GCS_BUCKET_NAME}/", "")
+            training_data_url = generate_signed_url(blob_name, expiration_minutes=1440)
+
+    training_job_id = f"pending:{avatar_id}"
+
+    try:
+        # Create Runway Character
+        character_id = await create_runway_character(
+            name=name,
+            description=description,
+            training_data_url=training_data_url or "",
+        )
+
+        # Trigger Gen-4.5 custom model training
+        training_job_id = await train_custom_model(
+            character_id=character_id,
+            training_data_url=training_data_url or "",
+            model_name=f"{name} Custom Model",
+        )
+
+        await update_avatar_training(avatar_id, training_job_id, character_id)
+        logger.info(f"Runway training started for avatar {avatar_id}: job={training_job_id}")
+
+    except Exception as e:
+        logger.error(f"Runway training initiation failed for {avatar_id}: {e}")
+        # Store pending job so user can see progress even if Runway call failed
+        await update_avatar_training(avatar_id, training_job_id)
+
+    return TrainCreatorResponse(
+        avatar_id=avatar_id,
+        training_job_id=training_job_id,
+        message=f"Training started for '{name}'. Monitor progress at /api/avatars/{avatar_id}",
+    )
+
+
+@app.get("/api/avatars", response_model=List[AvatarResponse])
+async def list_avatars_endpoint():
+    avatars = await list_avatars()
+    return [AvatarResponse(**a) for a in avatars]
+
+
+@app.get("/api/avatars/{avatar_id}", response_model=AvatarResponse)
+async def get_avatar_endpoint(avatar_id: str):
+    avatar = await get_avatar(avatar_id)
+    if not avatar:
+        raise HTTPException(status_code=404, detail="Avatar not found")
+    return AvatarResponse(**avatar)
 
 
 # ── Legacy video endpoint (backward compatibility) ─────────────────────────────

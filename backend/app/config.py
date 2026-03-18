@@ -8,7 +8,10 @@ class Settings(BaseSettings):
     VEO_MODEL: str = "veo-2.0-generate-001"
     GEMINI_MODEL: str = "gemini-2.0-flash"
 
-    # Kling AI
+    # Runway ML
+    RUNWAYML_API_SECRET: Optional[str] = None
+
+    # Kling AI (legacy fallback)
     KLING_ACCESS_KEY: Optional[str] = None
     KLING_SECRET_KEY: Optional[str] = None
 
