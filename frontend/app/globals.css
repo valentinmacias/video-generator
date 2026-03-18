@@ -2,64 +2,169 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Google Font ─────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* ── CSS Variables ───────────────────────────────────────────────────────── */
 :root {
-  --background: #0f172a;
-  --foreground: #f1f5f9;
+  --background:     #08080f;
+  --foreground:     #f0f0ff;
+  --surface:        #0f0f1a;
+  --card:           #141420;
+  --border:         #1e1e30;
+  --accent:         #00d4b8;
+  --accent-blue:    #4f7eff;
+  --accent-purple:  #8b5cf6;
+  --muted:          #6b7280;
+  --sidebar-width:  240px;
 }
 
-body {
+/* ── Base ────────────────────────────────────────────────────────────────── */
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
   background: var(--background);
   color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Skeleton shimmer */
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar             { width: 4px; height: 4px; }
+::-webkit-scrollbar-track       { background: transparent; }
+::-webkit-scrollbar-thumb       { background: #1e1e30; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #2e2e46; }
+
+/* ── Glassmorphism card ──────────────────────────────────────────────────── */
+.glass {
+  background:       rgba(20, 20, 32, 0.8);
+  backdrop-filter:  blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border:           1px solid rgba(255, 255, 255, 0.06);
+}
+
+.glass-hover:hover {
+  background:  rgba(26, 26, 42, 0.9);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Skeleton shimmer ────────────────────────────────────────────────────── */
 .skeleton {
   background: linear-gradient(
     90deg,
-    #1e293b 25%,
-    #334155 50%,
-    #1e293b 75%
+    #141420 25%,
+    #1e1e30 50%,
+    #141420 75%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.5s infinite linear;
+  animation: shimmer 1.8s infinite linear;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
-::-webkit-scrollbar-track { background: #0f172a; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #475569; }
+/* ── Neon accent button ──────────────────────────────────────────────────── */
+.btn-accent {
+  background: linear-gradient(135deg, #00d4b8 0%, #00aff0 100%);
+  color: #000;
+  font-weight: 700;
+  transition: all 0.2s;
+  box-shadow: 0 0 0 0 rgba(0, 212, 184, 0);
+}
+.btn-accent:hover {
+  box-shadow: 0 0 24px rgba(0, 212, 184, 0.5);
+  transform: translateY(-1px);
+}
+.btn-accent:active {
+  transform: translateY(0);
+}
+.btn-accent:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
 
-/* Motion strength slider */
+/* ── Gradient text ───────────────────────────────────────────────────────── */
+.gradient-text {
+  background: linear-gradient(135deg, #00d4b8 0%, #4f7eff 50%, #8b5cf6 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ── Step connector line ─────────────────────────────────────────────────── */
+.step-connector {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, #1e1e30, #2e2e46, #1e1e30);
+}
+.step-connector.active {
+  background: linear-gradient(90deg, #00d4b8, #4f7eff);
+}
+
+/* ── Motion slider ───────────────────────────────────────────────────────── */
 .motion-slider {
   -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  background: linear-gradient(to right, #6366f1, #818cf8);
-  border-radius: 2px;
-  outline: none;
+  appearance:          none;
+  height:              4px;
+  background:          linear-gradient(to right, #00d4b8, #4f7eff);
+  border-radius:       2px;
+  outline:             none;
 }
 .motion-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: #818cf8;
-  cursor: pointer;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
-  transition: box-shadow 0.15s;
+  appearance:          none;
+  width:              18px;
+  height:             18px;
+  border-radius:      50%;
+  background:         #00d4b8;
+  cursor:             pointer;
+  box-shadow:         0 0 0 3px rgba(0, 212, 184, 0.25),
+                      0 2px 8px rgba(0,0,0,0.5);
+  transition:         box-shadow 0.15s;
 }
 .motion-slider::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 0 5px rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 0 6px rgba(0, 212, 184, 0.35),
+              0 2px 8px rgba(0,0,0,0.5);
 }
 .motion-slider::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
+  width:  18px; height: 18px;
   border-radius: 50%;
-  background: #818cf8;
-  cursor: pointer;
-  border: none;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+  background: #00d4b8;
+  cursor: pointer; border: none;
+  box-shadow: 0 0 0 3px rgba(0, 212, 184, 0.25);
+}
+
+/* ── Image card hover overlay ────────────────────────────────────────────── */
+.image-card-overlay {
+  background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.2) 60%, transparent 100%);
+}
+
+/* ── Progress ring animation ─────────────────────────────────────────────── */
+.progress-ring-circle {
+  transition: stroke-dashoffset 0.5s ease;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
+}
+
+/* ── Sidebar active link ─────────────────────────────────────────────────── */
+.sidebar-link {
+  position: relative;
+  transition: all 0.2s;
+}
+.sidebar-link.active::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 50%;
+  transform: translateY(-50%);
+  width: 3px; height: 60%;
+  border-radius: 0 2px 2px 0;
+  background: linear-gradient(to bottom, #00d4b8, #4f7eff);
+}
+
+/* ── Voiceover modal backdrop ────────────────────────────────────────────── */
+.modal-backdrop {
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }

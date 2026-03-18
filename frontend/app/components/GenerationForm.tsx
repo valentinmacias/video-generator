@@ -1,25 +1,53 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
-  Sparkles, Send, Film, ImageIcon, Info, ChevronDown, ChevronUp,
-  Wand2, Eye, EyeOff, Zap, Clock, Maximize2, Camera, Wind,
-  Sun, Palette, Star, Hash, Ban, Layers, Upload, X, Video,
-  Cpu, RefreshCw, Play, SquarePlay, TriangleAlert,
+  Sparkles, ImageIcon, Film, Upload, X, Play, Check,
+  Wand2, ChevronDown, Camera, Zap, RotateCcw,
+  Mic, Download, AlertCircle, Clock, Loader2,
 } from "lucide-react";
+import { clsx } from "clsx";
 import {
   Brand, GenerateResponse, GenerateRequest,
   VideoParams, ImageParams, KlingParams, ModelProvider,
   DEFAULT_VIDEO_PARAMS, DEFAULT_IMAGE_PARAMS, DEFAULT_KLING_PARAMS,
-  GenerationMode, VeoModel, MotionStrength,
-  generateAsset, fileToBase64,
+  VeoModel, generateAsset, fileToBase64, getVideo, VideoStatus,
 } from "../lib/api";
+import { CircularProgress } from "./CircularProgress";
+import { VoiceoverModal } from "./VoiceoverModal";
 
-// ── Types ────────────────────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface GenerationFormProps {
   brands:      Brand[];
   onGenerated: (response: GenerateResponse) => void;
+}
+
+type TabMode = "video" | "image";
+
+type Phase =
+  | "setup"         // initial: prompt + settings
+  | "gen-ref"       // generating 3 reference images
+  | "pick-ref"      // user selects one image
+  | "animating"     // generating 2 videos
+  | "done";         // videos ready
+
+interface RefImage {
+  id:       string;
+  url:      string | null;
+  b64:      string | null;
+  loading:  boolean;
+  error?:   string;
+}
+
+interface VideoResult {
+  slotId:    string;
+  videoId:   string;
+  status:    VideoStatus;
+  url?:      string;
+  progress:  number;
+  error?:    string;
 }
 
 interface MediaFile {
@@ -28,1518 +56,1020 @@ interface MediaFile {
   objectUrl: string;
 }
 
-// ── Option lists ─────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-// ── Provider + model options ──────────────────────────────────────────────────────
-
-const PROVIDER_OPTIONS: {
-  value: ModelProvider; label: string; badge: string; badgeColor: string;
-  desc: string; warning?: string;
-}[] = [
-  {
-    value:      "veo",
-    label:      "Google Veo 3.1",
-    badge:      "Cinematic quality",
-    badgeColor: "bg-blue-900/50 text-blue-300 border-blue-800/40",
-    desc:       "Google's flagship model — highest fidelity, best for polished brand content",
-    warning:    "Strict safety filters active",
-  },
-  {
-    value:      "kling",
-    label:      "Kling 3.0",
-    badge:      "Best for UGC & B-rolls",
-    badgeColor: "bg-emerald-900/50 text-emerald-300 border-emerald-800/40",
-    desc:       "Excels at realistic UGC-style content and subject consistency from reference images",
-  },
+const VEO_MODELS: { value: VeoModel; label: string; badge: string }[] = [
+  { value: "veo-3.1-generate-preview", label: "Veo 3.1 Preview", badge: "Latest" },
+  { value: "veo-3.0-generate-preview", label: "Veo 3.0 Preview", badge: "Higher Quality" },
+  { value: "veo-2.0-generate-001",     label: "Veo 2.0",         badge: "Fast" },
 ];
 
-const KLING_MODEL_OPTIONS = [
-  { value: "kling-3.0", label: "Kling 3.0", badge: "Latest",       desc: "Most powerful, best realism" },
-  { value: "kling-2.1", label: "Kling 2.1", badge: "Master",       desc: "Previous gen, fast & stable" },
-  { value: "kling-1.5", label: "Kling 1.5", badge: "Fast & Light", desc: "Lightweight, quick iterations" },
+const KLING_MODELS = [
+  { value: "kling-3.0", label: "Kling 3.0", badge: "Latest" },
+  { value: "kling-2.1", label: "Kling 2.1", badge: "Stable" },
+  { value: "kling-1.5", label: "Kling 1.5", badge: "Fast"   },
 ];
 
-const VEO_MODEL_OPTIONS: { value: VeoModel; label: string; badge: string; desc: string }[] = [
-  {
-    value: "veo-2.0-generate-001",
-    label: "Veo 2.0",
-    badge: "Fast & Reliable",
-    desc:  "Best for quick iterations and reliable results",
-  },
-  {
-    value: "veo-3.0-generate-preview",
-    label: "Veo 3.0 Preview",
-    badge: "Higher Quality",
-    desc:  "Improved realism, better prompt adherence",
-  },
-  {
-    value: "veo-3.1-generate-preview",
-    label: "Veo 3.1 Preview",
-    badge: "Latest",
-    desc:  "Most powerful model, highest quality output",
-  },
-];
+const ASPECT_RATIOS = ["16:9", "9:16", "1:1", "4:3"] as const;
+const DURATIONS     = [5, 8, 10] as const;
 
-const ASPECT_RATIO_OPTIONS = [
-  { value: "16:9",  label: "16:9",  desc: "Landscape"    },
-  { value: "9:16",  label: "9:16",  desc: "Portrait"     },
-  { value: "1:1",   label: "1:1",   desc: "Square"       },
-  { value: "21:9",  label: "21:9",  desc: "Ultrawide"    },
-  { value: "4:3",   label: "4:3",   desc: "Classic"      },
-];
+const CAMERA_MOVES = [
+  "static", "slow_pan", "dolly_in", "dolly_out", "orbit", "handheld", "epic_tracking",
+] as const;
 
-const VIDEO_DURATION_OPTIONS = [
-  { value: 5,  label: "5s",  desc: "Short"    },
-  { value: 8,  label: "8s",  desc: "Standard" },
-  { value: 10, label: "10s", desc: "Extended" },
-];
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
-const CAMERA_MOVEMENT_OPTIONS = [
-  { value: "static",        label: "Static",        desc: "Locked, no movement" },
-  { value: "slow_pan",      label: "Slow Pan",       desc: "Gentle horizontal sweep" },
-  { value: "dolly_in",      label: "Dolly In",       desc: "Push toward subject" },
-  { value: "dolly_out",     label: "Dolly Out",      desc: "Pull away dramatically" },
-  { value: "crane",         label: "Crane Shot",     desc: "Sweeping vertical arc" },
-  { value: "orbit",         label: "Orbit",          desc: "Revolve around subject" },
-  { value: "handheld",      label: "Handheld",       desc: "Intimate, natural shake" },
-  { value: "epic_tracking", label: "Epic Tracking",  desc: "Dynamic follow shot" },
-];
-
-const LIGHTING_OPTIONS = [
-  { value: "soft_natural", label: "Soft Natural",    desc: "Diffused daylight"    },
-  { value: "golden_hour",  label: "Golden Hour",     desc: "Warm amber tones"     },
-  { value: "dramatic",     label: "Dramatic Cinema", desc: "High-contrast shadows" },
-  { value: "studio",       label: "Studio Lighting", desc: "Clean, controlled"    },
-  { value: "neon",         label: "Neon Cyberpunk",  desc: "Vibrant urban glow"   },
-  { value: "moody_low_key",label: "Moody Low-Key",   desc: "Dark, mysterious"     },
-];
-
-const VISUAL_STYLE_OPTIONS = [
-  { value: "photorealistic", label: "Photorealistic",     desc: "True-to-life realism"      },
-  { value: "cinematic",      label: "Hollywood Cinematic", desc: "Movie-grade look"          },
-  { value: "commercial",     label: "Commercial Ad",       desc: "Polished brand-safe"       },
-  { value: "artistic",       label: "Artistic Film",       desc: "Painterly, expressive"     },
-  { value: "documentary",    label: "Documentary",         desc: "Authentic, observational"  },
-  { value: "anime",          label: "Anime",               desc: "Vibrant animation style"   },
-];
-
-const IMAGE_STYLE_OPTIONS = [
-  { value: "photorealistic", label: "Photorealistic", desc: "True-to-life photo"   },
-  { value: "cinematic",      label: "Cinematic",      desc: "Movie still quality"  },
-  { value: "commercial",     label: "Commercial",     desc: "Brand-safe, polished" },
-  { value: "artistic",       label: "Artistic",       desc: "Fine art aesthetic"   },
-  { value: "illustration",   label: "Illustration",   desc: "Digital art"          },
-  { value: "3d_render",      label: "3D Render",      desc: "CGI quality"          },
-  { value: "anime",          label: "Anime",          desc: "Vibrant anime style"  },
-];
-
-const QUALITY_OPTIONS = [
-  { value: "standard", label: "Standard", desc: "Fast generation"          },
-  { value: "high",     label: "High",     desc: "Sharp, professional"      },
-  { value: "ultra",    label: "Ultra",    desc: "4K cinematic masterpiece" },
-];
-
-const IMAGE_COUNT_OPTIONS = [
-  { value: 1, label: "1" }, { value: 2, label: "2" },
-  { value: 3, label: "3" }, { value: 4, label: "4" },
-];
-
-// Motion slider: 10 positions → 5 named presets
-const MOTION_PRESETS: { value: MotionStrength; label: string; sliderPos: number }[] = [
-  { value: "subtle",    label: "Subtle",    sliderPos: 1  },
-  { value: "medium",    label: "Medium",    sliderPos: 3  },
-  { value: "dynamic",   label: "Dynamic",   sliderPos: 5  },
-  { value: "cinematic", label: "Cinematic", sliderPos: 7  },
-  { value: "epic",      label: "Epic",      sliderPos: 9  },
-];
-
-function motionToSlider(m: MotionStrength): number {
-  return MOTION_PRESETS.find((p) => p.value === m)?.sliderPos ?? 3;
+async function urlToBase64(url: string): Promise<string> {
+  const res  = await fetch(url);
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
-function sliderToMotion(v: number): MotionStrength {
-  if (v <= 1) return "subtle";
-  if (v <= 3) return "medium";
-  if (v <= 5) return "dynamic";
-  if (v <= 7) return "cinematic";
-  return "epic";
-}
-
-// ── Micro-components ──────────────────────────────────────────────────────────────
-
-function Tooltip({ text, children }: { text: string; children: React.ReactNode }) {
+function StepIndicator({ steps, current }: { steps: string[]; current: number }) {
   return (
-    <span className="group relative inline-flex items-center">
-      {children}
-      <span className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-60 -translate-x-1/2 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-center text-xs text-slate-300 opacity-0 shadow-xl transition-opacity group-hover:opacity-100">
-        {text}
-      </span>
-    </span>
-  );
-}
-
-function SectionLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-      {children}
-    </p>
-  );
-}
-
-function FieldLabel({
-  label, tooltip, icon: Icon,
-}: { label: string; tooltip?: string; icon?: React.ElementType }) {
-  return (
-    <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-400">
-      {Icon && <Icon className="h-3 w-3 text-slate-500" />}
-      {label}
-      {tooltip && (
-        <Tooltip text={tooltip}>
-          <Info className="h-3 w-3 cursor-help text-slate-600 hover:text-slate-400 transition-colors" />
-        </Tooltip>
-      )}
-    </label>
-  );
-}
-
-function Select({
-  label, tooltip, icon, value, onChange, options,
-}: {
-  label: string; tooltip?: string; icon?: React.ElementType;
-  value: string | number;
-  onChange: (v: string) => void;
-  options: { value: string | number; label: string; desc?: string }[];
-}) {
-  return (
-    <div className="space-y-1.5">
-      <FieldLabel label={label} tooltip={tooltip} icon={icon} />
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-slate-700/60 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50 hover:border-slate-600"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}{o.desc ? ` — ${o.desc}` : ""}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-function Toggle({
-  checked, onChange, label, description,
-}: { checked: boolean; onChange: (v: boolean) => void; label: string; description?: string }) {
-  return (
-    <button type="button" onClick={() => onChange(!checked)} className="flex w-full items-center gap-3 text-left">
-      <span className={`relative inline-flex h-5 w-9 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${checked ? "bg-indigo-600" : "bg-slate-700"}`}>
-        <span className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${checked ? "translate-x-4" : "translate-x-0"}`} />
-      </span>
-      <span>
-        <span className="text-xs font-semibold text-slate-300">{label}</span>
-        {description && <span className="block text-[10px] text-slate-500">{description}</span>}
-      </span>
-    </button>
-  );
-}
-
-// ── Pill button group ──────────────────────────────────────────────────────────────
-
-function PillGroup<T extends string | number>({
-  label, tooltip, icon, value, onChange, options,
-}: {
-  label: string; tooltip?: string; icon?: React.ElementType;
-  value: T; onChange: (v: T) => void;
-  options: { value: T; label: string; desc?: string }[];
-}) {
-  return (
-    <div className="space-y-1.5">
-      <FieldLabel label={label} tooltip={tooltip} icon={icon} />
-      <div className="flex flex-wrap gap-1.5">
-        {options.map((o) => (
-          <button
-            key={String(o.value)}
-            type="button"
-            onClick={() => onChange(o.value)}
-            className={`rounded-md px-2.5 py-1 text-xs font-medium transition-all ${
-              value === o.value
-                ? "bg-indigo-600 text-white shadow-sm shadow-indigo-900/50"
-                : "border border-slate-700/60 bg-slate-800/60 text-slate-400 hover:border-slate-600 hover:text-slate-300"
-            }`}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Motion strength slider ─────────────────────────────────────────────────────────
-
-function MotionSlider({
-  value, onChange,
-}: { value: MotionStrength; onChange: (v: MotionStrength) => void }) {
-  const sliderVal = motionToSlider(value);
-
-  return (
-    <div className="space-y-2">
-      <FieldLabel
-        label="Motion Strength"
-        icon={Wind}
-        tooltip="Overall intensity of movement and energy within the scene."
-      />
-      <div className="space-y-2 rounded-lg border border-slate-700/60 bg-slate-800/60 px-4 py-3">
-        {/* Slider */}
-        <input
-          type="range"
-          min={1}
-          max={10}
-          step={1}
-          value={sliderVal}
-          onChange={(e) => onChange(sliderToMotion(Number(e.target.value)))}
-          className="motion-slider w-full cursor-pointer"
-        />
-        {/* Preset labels */}
-        <div className="flex justify-between">
-          {MOTION_PRESETS.map((p) => (
-            <button
-              key={p.value}
-              type="button"
-              onClick={() => onChange(p.value)}
-              className={`text-[10px] font-medium transition-colors ${
-                value === p.value ? "text-indigo-400" : "text-slate-600 hover:text-slate-400"
-              }`}
+    <div className="flex items-center gap-0 px-6 py-4">
+      {steps.map((label, i) => (
+        <div key={i} className="flex items-center">
+          <div className="flex flex-col items-center gap-1">
+            <motion.div
+              animate={{
+                backgroundColor: i < current ? "#00d4b8" : i === current ? "transparent" : "transparent",
+                borderColor:     i <= current ? "#00d4b8" : "#1e1e30",
+              }}
+              className="flex h-7 w-7 items-center justify-center rounded-full border-2 text-xs font-bold"
             >
-              {p.label}
-            </button>
-          ))}
-        </div>
-        {/* Active badge */}
-        <div className="flex justify-center">
-          <span className="rounded-full bg-indigo-900/40 px-2.5 py-0.5 text-[10px] font-semibold text-indigo-300 border border-indigo-800/50">
-            {MOTION_PRESETS.find((p) => p.value === value)?.label ?? "Medium"}
-            {" "}· {sliderVal}/10
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Image drop zone ────────────────────────────────────────────────────────────────
-
-function ImageDropZone({
-  label, tooltip, icon: Icon = Upload,
-  file, onFile, onClear,
-  accept = "image/jpeg,image/png,image/webp",
-  hint = "JPEG, PNG, WebP",
-}: {
-  label: string; tooltip?: string; icon?: React.ElementType;
-  file: MediaFile | null;
-  onFile: (mf: MediaFile) => void;
-  onClear: () => void;
-  accept?: string;
-  hint?: string;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
-
-  async function handleFile(f: File) {
-    const b64 = await fileToBase64(f);
-    const objectUrl = URL.createObjectURL(f);
-    onFile({ file: f, b64, objectUrl });
-  }
-
-  return (
-    <div className="space-y-1.5">
-      <FieldLabel label={label} tooltip={tooltip} icon={Icon} />
-
-      {file ? (
-        <div className="relative overflow-hidden rounded-lg border border-slate-700/60 bg-slate-800/60">
-          {/* Preview */}
-          <img
-            src={file.objectUrl}
-            alt="preview"
-            className="h-24 w-full object-cover"
-          />
-          <div className="absolute inset-0 flex items-end bg-gradient-to-t from-slate-900/80 to-transparent p-2">
-            <span className="truncate text-[10px] text-slate-300">{file.file.name}</span>
-          </div>
-          <button
-            type="button"
-            onClick={onClear}
-            className="absolute right-1.5 top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-slate-900/80 text-slate-300 hover:bg-red-900/80 hover:text-red-300 transition-colors"
-          >
-            <X className="h-3 w-3" />
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={async (e) => {
-            e.preventDefault();
-            setDragging(false);
-            const f = e.dataTransfer.files[0];
-            if (f) handleFile(f);
-          }}
-          className={`flex w-full flex-col items-center gap-1.5 rounded-lg border border-dashed px-3 py-4 text-center transition-colors ${
-            dragging
-              ? "border-indigo-500 bg-indigo-900/20"
-              : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600 hover:bg-slate-800/60"
-          }`}
-        >
-          <Icon className="h-5 w-5 text-slate-500" />
-          <span className="text-[10px] text-slate-500">Click or drag · {hint}</span>
-        </button>
-      )}
-
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        className="hidden"
-        onChange={async (e) => {
-          const f = e.target.files?.[0];
-          if (f) handleFile(f);
-        }}
-      />
-    </div>
-  );
-}
-
-// ── Multi image drop zone ──────────────────────────────────────────────────────────
-
-function MultiImageDropZone({
-  files, onAdd, onRemove, maxFiles = 4,
-}: {
-  files:    MediaFile[];
-  onAdd:    (mf: MediaFile) => void;
-  onRemove: (index: number) => void;
-  maxFiles?: number;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragging, setDragging] = useState(false);
-
-  async function handleFiles(fileList: FileList) {
-    const remaining = maxFiles - files.length;
-    const toProcess = Array.from(fileList).slice(0, remaining);
-    for (const f of toProcess) {
-      const b64 = await fileToBase64(f);
-      const objectUrl = URL.createObjectURL(f);
-      onAdd({ file: f, b64, objectUrl });
-    }
-  }
-
-  return (
-    <div className="space-y-1.5">
-      <FieldLabel
-        label={`Reference Images (${files.length}/${maxFiles})`}
-        icon={ImageIcon}
-        tooltip="Upload 1–4 reference images for visual style/scene guidance. The first image conditions the Veo generation."
-      />
-
-      <div className="space-y-2">
-        {/* Thumbnails */}
-        {files.length > 0 && (
-          <div className="grid grid-cols-4 gap-1.5">
-            {files.map((mf, i) => (
-              <div key={i} className="group relative overflow-hidden rounded-lg border border-slate-700/60">
-                <img src={mf.objectUrl} alt={`ref ${i + 1}`} className="h-16 w-full object-cover" />
-                <div className="absolute inset-0 flex items-center justify-center bg-slate-900/60 opacity-0 transition-opacity group-hover:opacity-100">
-                  <button
-                    type="button"
-                    onClick={() => onRemove(i)}
-                    className="flex h-6 w-6 items-center justify-center rounded-full bg-red-900/80 text-red-300 hover:bg-red-800"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-                <span className="absolute bottom-0 left-0 right-0 bg-slate-900/70 py-0.5 text-center text-[9px] text-slate-400">
-                  Ref {i + 1}
-                </span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add zone */}
-        {files.length < maxFiles && (
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-            onDragLeave={() => setDragging(false)}
-            onDrop={async (e) => {
-              e.preventDefault();
-              setDragging(false);
-              handleFiles(e.dataTransfer.files);
-            }}
-            className={`flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-3 text-center transition-colors ${
-              dragging
-                ? "border-indigo-500 bg-indigo-900/20"
-                : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
-            }`}
-          >
-            <Upload className="h-4 w-4 text-slate-500" />
-            <span className="text-[10px] text-slate-500">
-              Add image{files.length > 0 ? ` (${maxFiles - files.length} remaining)` : "s"} · JPEG, PNG, WebP
-            </span>
-          </button>
-        )}
-      </div>
-
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/jpeg,image/png,image/webp"
-        multiple
-        className="hidden"
-        onChange={(e) => { if (e.target.files) handleFiles(e.target.files); }}
-      />
-    </div>
-  );
-}
-
-// ── Veo model selector ─────────────────────────────────────────────────────────────
-
-function VeoModelSelector({
-  value, onChange,
-}: { value: VeoModel; onChange: (v: VeoModel) => void }) {
-  return (
-    <div className="space-y-1.5">
-      <FieldLabel
-        label="Veo Model"
-        icon={Cpu}
-        tooltip="Select the Veo model version. Newer models produce higher quality but may take longer."
-      />
-      <div className="grid grid-cols-1 gap-2">
-        {VEO_MODEL_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            className={`flex items-center justify-between rounded-lg border px-3 py-2.5 text-left transition-all ${
-              value === opt.value
-                ? "border-indigo-600/60 bg-indigo-900/30 ring-1 ring-indigo-600/40"
-                : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600 hover:bg-slate-800/60"
-            }`}
-          >
-            <div>
-              <span className="text-xs font-semibold text-slate-200">{opt.label}</span>
-              <span className="ml-2 rounded-full bg-slate-700/60 px-1.5 py-0.5 text-[9px] font-medium text-slate-400">
-                {opt.badge}
-              </span>
-              <p className="text-[10px] text-slate-500 mt-0.5">{opt.desc}</p>
-            </div>
-            {value === opt.value && (
-              <div className="ml-2 h-2 w-2 rounded-full bg-indigo-400 flex-shrink-0" />
-            )}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Generation provider selector ──────────────────────────────────────────────────
-
-function ProviderSelector({
-  value, onChange,
-}: { value: ModelProvider; onChange: (v: ModelProvider) => void }) {
-  return (
-    <div className="space-y-1.5">
-      <FieldLabel
-        label="Generation Provider"
-        icon={Film}
-        tooltip="Choose which AI model generates the video. Kling 3.0 excels at copying UGC subject style; Veo produces the highest cinematic quality."
-      />
-      <div className="grid grid-cols-1 gap-2">
-        {PROVIDER_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => onChange(opt.value)}
-            className={`flex items-start justify-between rounded-lg border px-3 py-2.5 text-left transition-all ${
-              value === opt.value
-                ? opt.value === "kling"
-                  ? "border-emerald-600/60 bg-emerald-900/20 ring-1 ring-emerald-600/40"
-                  : "border-indigo-600/60 bg-indigo-900/30 ring-1 ring-indigo-600/40"
-                : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600 hover:bg-slate-800/60"
-            }`}
-          >
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-semibold text-slate-200">{opt.label}</span>
-                <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${opt.badgeColor}`}>
-                  {opt.badge}
-                </span>
-              </div>
-              <p className="mt-0.5 text-[10px] text-slate-500 leading-relaxed">{opt.desc}</p>
-              {opt.warning && (
-                <div className="mt-1 flex items-center gap-1">
-                  <TriangleAlert className="h-2.5 w-2.5 text-amber-500 flex-shrink-0" />
-                  <span className="text-[9px] text-amber-500">{opt.warning}</span>
-                </div>
+              {i < current ? (
+                <Check size={12} className="text-black" />
+              ) : (
+                <span className={i === current ? "text-tt-accent" : "text-tt-muted"}>{i + 1}</span>
               )}
-            </div>
-            {value === opt.value && (
-              <div className={`ml-2 mt-1 h-2 w-2 rounded-full flex-shrink-0 ${opt.value === "kling" ? "bg-emerald-400" : "bg-indigo-400"}`} />
-            )}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-
-// ── Kling settings panel ───────────────────────────────────────────────────────────
-
-function KlingSlider({
-  label, tooltip, icon: Icon, value, onChange, min = 0, max = 1, step = 0.05,
-  formatValue,
-}: {
-  label: string; tooltip?: string; icon?: React.ElementType;
-  value: number; onChange: (v: number) => void;
-  min?: number; max?: number; step?: number;
-  formatValue?: (v: number) => string;
-}) {
-  const pct = ((value - min) / (max - min)) * 100;
-  const display = formatValue ? formatValue(value) : `${Math.round(value * 100)}%`;
-  return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <FieldLabel label={label} tooltip={tooltip} icon={Icon} />
-        <span className="rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
-          {display}
-        </span>
-      </div>
-      <div className="space-y-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-4 py-3">
-        <input
-          type="range" min={min} max={max} step={step} value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          className="kling-slider w-full cursor-pointer accent-emerald-500"
-        />
-        <div className="flex justify-between text-[9px] text-slate-600">
-          <span>{min === 0 ? "Off / Creative" : String(min)}</span>
-          <span>{max === 1 ? "Max / Strict" : String(max)}</span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function KlingPanel({
-  params, onChange,
-}: {
-  params: KlingParams;
-  onChange: <K extends keyof KlingParams>(k: K, v: KlingParams[K]) => void;
-}) {
-  const [showKlingRef, setShowKlingRef] = useState(false);
-  const [refImage, setRefImage]         = useState<MediaFile | null>(null);
-  const [condImage, setCondImage]       = useState<MediaFile | null>(null);
-
-  function setRef(mf: MediaFile) {
-    setRefImage(mf);
-    onChange("reference_image_b64", mf.b64);
-  }
-  function clearRef() {
-    setRefImage(null);
-    onChange("reference_image_b64", null);
-  }
-  function setCond(mf: MediaFile) {
-    setCondImage(mf);
-    onChange("conditioning_image_b64", mf.b64);
-  }
-  function clearCond() {
-    setCondImage(null);
-    onChange("conditioning_image_b64", null);
-  }
-
-  return (
-    <div className="space-y-4 rounded-xl border border-emerald-800/30 bg-emerald-900/10 p-4">
-
-      {/* Header badge */}
-      <div className="flex items-center gap-2">
-        <span className="rounded-full border border-emerald-700/40 bg-emerald-900/40 px-2.5 py-0.5 text-[10px] font-bold text-emerald-300">
-          Kling 3.0 — Best for copying existing UGC style
-        </span>
-      </div>
-
-      {/* Model */}
-      <div className="space-y-1.5">
-        <FieldLabel label="Kling Model" icon={Cpu} tooltip="Select Kling model version. 3.0 is the most powerful." />
-        <div className="grid grid-cols-1 gap-1.5">
-          {KLING_MODEL_OPTIONS.map((opt) => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => onChange("kling_model", opt.value)}
-              className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left transition-all ${
-                params.kling_model === opt.value
-                  ? "border-emerald-600/60 bg-emerald-900/30 ring-1 ring-emerald-600/30"
-                  : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
-              }`}
-            >
-              <div>
-                <span className="text-xs font-semibold text-slate-200">{opt.label}</span>
-                <span className="ml-2 rounded-full bg-slate-700/60 px-1.5 py-0.5 text-[9px] font-medium text-slate-400">
-                  {opt.badge}
-                </span>
-                <p className="text-[10px] text-slate-500 mt-0.5">{opt.desc}</p>
-              </div>
-              {params.kling_model === opt.value && (
-                <div className="ml-2 h-2 w-2 rounded-full bg-emerald-400 flex-shrink-0" />
-              )}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Duration + Aspect */}
-      <div className="grid grid-cols-2 gap-3">
-        <PillGroup
-          label="Duration"
-          icon={Clock}
-          tooltip="Kling supports 5 or 10 second clips."
-          value={params.duration}
-          onChange={(v) => onChange("duration", v as 5 | 10)}
-          options={[{ value: 5, label: "5s", desc: "Short" }, { value: 10, label: "10s", desc: "Extended" }]}
-        />
-        <PillGroup
-          label="Aspect Ratio"
-          icon={Maximize2}
-          tooltip="Frame dimensions. 9:16 for vertical Reels."
-          value={params.aspect_ratio}
-          onChange={(v) => onChange("aspect_ratio", v as KlingParams["aspect_ratio"])}
-          options={[
-            { value: "16:9", label: "16:9" },
-            { value: "9:16", label: "9:16" },
-            { value: "1:1",  label: "1:1"  },
-          ]}
-        />
-      </div>
-
-      {/* Subject consistency + Motion intensity */}
-      <KlingSlider
-        label="Subject Consistency"
-        icon={Layers}
-        tooltip="How strictly the video follows subject/style from your reference. Higher = more faithful to reference."
-        value={params.cfg_scale}
-        onChange={(v) => onChange("cfg_scale", v)}
-      />
-
-      <KlingSlider
-        label="Motion Intensity"
-        icon={Wind}
-        tooltip="Overall motion energy. Below 50% = Standard mode (calm). Above 50% = Pro mode (dynamic)."
-        value={params.motion_intensity}
-        onChange={(v) => onChange("motion_intensity", v)}
-        formatValue={(v) => v > 0.5 ? `${Math.round(v * 100)}% (Pro)` : `${Math.round(v * 100)}% (Std)`}
-      />
-
-      {/* Reference media */}
-      <div className="rounded-xl border border-slate-700/40 bg-slate-800/30">
-        <button
-          type="button"
-          onClick={() => setShowKlingRef(!showKlingRef)}
-          className="flex w-full items-center justify-between px-4 py-3"
-        >
-          <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-            <Upload className="h-3 w-3" />
-            Reference Media
-            {(refImage || condImage) && (
-              <span className="rounded-full bg-emerald-900/50 px-1.5 py-0.5 text-[9px] text-emerald-400 border border-emerald-800/40">
-                {[refImage && "ref", condImage && "start"].filter(Boolean).join(" · ")}
-              </span>
-            )}
-          </span>
-          {showKlingRef
-            ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" />
-            : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
-          }
-        </button>
-
-        {showKlingRef && (
-          <div className="space-y-4 border-t border-slate-700/40 px-4 pb-4 pt-3">
-            <p className="text-[10px] text-slate-500 leading-relaxed">
-              Upload a frame from your source UGC to match its subject/style, or a conditioning image
-              to pin the opening frame (triggers image-to-video mode).
-            </p>
-            <div className="grid grid-cols-2 gap-3">
-              <ImageDropZone
-                label="UGC Reference Frame"
-                icon={Layers}
-                tooltip="A frame from your source UGC video. Kling uses this for subject/style consistency across the generated clip."
-                file={refImage}
-                onFile={setRef}
-                onClear={clearRef}
-              />
-              <ImageDropZone
-                label="Start Frame"
-                icon={Play}
-                tooltip="Pin the opening frame of the video (switches to image-to-video mode)."
-                file={condImage}
-                onFile={setCond}
-                onClear={clearCond}
-              />
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Negative prompt */}
-      <div className="space-y-1.5">
-        <FieldLabel label="Negative Prompt" icon={Ban} tooltip="What to exclude from the video." />
-        <textarea
-          value={params.negative_prompt ?? ""}
-          onChange={(e) => onChange("negative_prompt", e.target.value || null)}
-          placeholder="blurry, watermarks, text overlays, distorted faces, low quality…"
-          rows={2}
-          maxLength={500}
-          className="w-full resize-none rounded-lg border border-slate-700/60 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-        />
-      </div>
-    </div>
-  );
-}
-
-
-// ── Live preview panel ─────────────────────────────────────────────────────────────
-
-function PreviewCard({
-  mode, videoParams, imageParams, enhancePrompt, prompt,
-  refImageCount, hasStartCard, hasEndCard,
-}: {
-  mode:           GenerationMode;
-  videoParams:    VideoParams;
-  imageParams:    ImageParams;
-  enhancePrompt:  boolean;
-  prompt:         string;
-  refImageCount:  number;
-  hasStartCard:   boolean;
-  hasEndCard:     boolean;
-}) {
-  const isVideo = mode === "video";
-
-  const modelLabel = VEO_MODEL_OPTIONS.find((o) => o.value === videoParams.veo_model)?.label ?? videoParams.veo_model;
-  const cameraLabel = CAMERA_MOVEMENT_OPTIONS.find((o) => o.value === videoParams.camera_movement)?.label ?? videoParams.camera_movement;
-  const lightLabel  = LIGHTING_OPTIONS.find((o) => o.value === videoParams.lighting_style)?.label ?? videoParams.lighting_style;
-  const styleLabel  = VISUAL_STYLE_OPTIONS.find((o) => o.value === videoParams.visual_style)?.label ?? videoParams.visual_style;
-  const motionLabel = MOTION_PRESETS.find((p) => p.value === videoParams.motion_strength)?.label ?? videoParams.motion_strength;
-  const imgStyleLabel = IMAGE_STYLE_OPTIONS.find((o) => o.value === imageParams.style)?.label ?? imageParams.style;
-
-  const videoRows = [
-    { label: "Model",    value: modelLabel },
-    { label: "Duration", value: `${videoParams.duration}s` },
-    { label: "Aspect",   value: videoParams.aspect_ratio },
-    { label: "Camera",   value: cameraLabel },
-    { label: "Motion",   value: motionLabel },
-    { label: "Lighting", value: lightLabel },
-    { label: "Style",    value: styleLabel },
-    { label: "Quality",  value: videoParams.quality.charAt(0).toUpperCase() + videoParams.quality.slice(1) },
-  ];
-
-  const imageRows = [
-    { label: "Aspect",   value: imageParams.aspect_ratio },
-    { label: "Style",    value: imgStyleLabel },
-    { label: "Quality",  value: imageParams.quality.charAt(0).toUpperCase() + imageParams.quality.slice(1) },
-    { label: "Count",    value: `${imageParams.number_of_images} image${imageParams.number_of_images > 1 ? "s" : ""}` },
-  ];
-
-  const rows = isVideo ? videoRows : imageRows;
-
-  const mediaBadges: string[] = [];
-  if (isVideo) {
-    if (refImageCount > 0) mediaBadges.push(`${refImageCount} ref img`);
-    if (hasStartCard) mediaBadges.push("start card");
-    if (hasEndCard)   mediaBadges.push("end card");
-  }
-
-  return (
-    <div className="sticky top-4 space-y-4 rounded-xl border border-slate-700/60 bg-slate-900/80 p-4 backdrop-blur">
-      {/* Header */}
-      <div className="flex items-center gap-2.5">
-        <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${isVideo ? "bg-indigo-600" : "bg-purple-600"}`}>
-          {isVideo ? <Film className="h-4 w-4 text-white" /> : <ImageIcon className="h-4 w-4 text-white" />}
-        </div>
-        <div>
-          <p className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Live Preview</p>
-          <p className="text-xs font-semibold text-slate-200">{isVideo ? "Video" : "Image"} Generation</p>
-        </div>
-      </div>
-
-      {/* Prompt preview */}
-      {prompt && (
-        <div className="rounded-lg border border-slate-700/40 bg-slate-800/60 p-2.5">
-          <p className="mb-1 text-[9px] font-bold uppercase tracking-widest text-slate-500">Prompt</p>
-          <p className="line-clamp-3 text-[10px] leading-relaxed text-slate-400">{prompt}</p>
-        </div>
-      )}
-
-      {/* Parameters */}
-      <div className="space-y-1.5">
-        {rows.map(({ label, value }) => (
-          <div key={label} className="flex items-center justify-between gap-2">
-            <span className="text-[10px] text-slate-500">{label}</span>
-            <span className="rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-medium text-slate-300 max-w-[120px] truncate text-right">
-              {value}
+            </motion.div>
+            <span className={clsx("text-[10px] font-medium whitespace-nowrap", i === current ? "text-tt-accent" : i < current ? "text-tt-text/60" : "text-tt-muted")}>
+              {label}
             </span>
           </div>
-        ))}
-      </div>
-
-      {/* Media badges */}
-      {mediaBadges.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {mediaBadges.map((b) => (
-            <span key={b} className="rounded-full border border-indigo-800/40 bg-indigo-900/30 px-2 py-0.5 text-[9px] font-medium text-indigo-400">
-              {b}
-            </span>
-          ))}
+          {i < steps.length - 1 && (
+            <div className={clsx("step-connector mb-5 mx-3", i < current ? "active" : "")} />
+          )}
         </div>
-      )}
-
-      <div className="border-t border-slate-800" />
-
-      {/* Enhancement status */}
-      <div className="flex items-center gap-2">
-        {enhancePrompt ? (
-          <>
-            <Sparkles className="h-3 w-3 text-amber-400" />
-            <span className="text-[10px] text-amber-300">Gemini enhancement ON</span>
-          </>
-        ) : (
-          <>
-            <EyeOff className="h-3 w-3 text-slate-500" />
-            <span className="text-[10px] text-slate-500">Raw mode — no enhancement</span>
-          </>
-        )}
-      </div>
-
-      {/* Time estimate */}
-      <div className="flex items-center gap-2">
-        <Clock className="h-3 w-3 text-slate-500" />
-        <span className="text-[10px] text-slate-500">
-          {isVideo ? "Est. 2–5 min (async)" : "Est. 5–20 sec (sync)"}
-        </span>
-      </div>
+      ))}
     </div>
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────────────
+// ── Main Component ─────────────────────────────────────────────────────────────
 
 export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
-  const [mode, setMode] = useState<GenerationMode>("video");
+  // ── Core state ──────────────────────────────────────────────────────────────
+  const [tabMode, setTabMode]       = useState<TabMode>("video");
+  const [phase, setPhase]           = useState<Phase>("setup");
+  const [error, setError]           = useState<string | null>(null);
 
-  // Provider — persisted in localStorage
-  const [provider, setProvider] = useState<ModelProvider>(() => {
-    if (typeof window !== "undefined") {
-      const saved = localStorage.getItem("vbg_provider");
-      if (saved === "kling" || saved === "veo") return saved;
-    }
-    return "veo";
-  });
+  // Settings
+  const [brand, setBrand]           = useState<Brand | null>(null);
+  const [prompt, setPrompt]         = useState("");
+  const [provider, setProvider]     = useState<ModelProvider>("veo");
+  const [veoModel, setVeoModel]     = useState<VeoModel>("veo-3.1-generate-preview");
+  const [klingModel, setKlingModel] = useState("kling-3.0");
+  const [gemini, setGemini]         = useState(true);
+  const [aspectRatio, setAspectRatio] = useState<string>("16:9");
+  const [duration, setDuration]     = useState(8);
+  const [cameraMove, setCameraMove] = useState("static");
+  const [showSettings, setShowSettings] = useState(false);
 
-  function handleProviderChange(v: ModelProvider) {
-    setProvider(v);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("vbg_provider", v);
-    }
+  // Reference images (generated or uploaded)
+  const [refImages, setRefImages]   = useState<RefImage[]>([]);
+  const [selectedRef, setSelectedRef] = useState<RefImage | null>(null);
+  const [uploadedRef, setUploadedRef] = useState<MediaFile | null>(null);
+  const refFileRef                  = useRef<HTMLInputElement>(null);
+
+  // Optional extras
+  const [modelRef, setModelRef]     = useState<MediaFile | null>(null);
+  const [startCard, setStartCard]   = useState<MediaFile | null>(null);
+  const modelFileRef                = useRef<HTMLInputElement>(null);
+  const startFileRef                = useRef<HTMLInputElement>(null);
+
+  // Video results
+  const [videos, setVideos]         = useState<VideoResult[]>([]);
+  const pollRef                     = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Voiceover modal
+  const [voiceoverOpen, setVoiceoverOpen] = useState(false);
+  const [voiceoverVideo, setVoiceoverVideo] = useState<VideoResult | null>(null);
+
+  // ── Cleanup ─────────────────────────────────────────────────────────────────
+  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
+
+  // ── Upload handler helper ────────────────────────────────────────────────────
+  async function handleFileUpload(
+    file: File,
+    setter: (mf: MediaFile | null) => void
+  ) {
+    const b64 = await fileToBase64(file);
+    setter({ file, b64, objectUrl: URL.createObjectURL(file) });
   }
 
-  // Brand
-  const [selectedBrandId, setSelectedBrandId] = useState("");
-  const effectiveBrandId = selectedBrandId || brands[0]?.id || "";
-  const selectedBrand = brands.find((b) => b.id === effectiveBrandId);
-
-  // Prompt
-  const [prompt, setPrompt] = useState("");
-  const [enhancePrompt, setEnhancePrompt] = useState(true);
-
-  // Veo video params
-  const [videoParams, setVideoParams] = useState<VideoParams>(DEFAULT_VIDEO_PARAMS);
-  const setVP = useCallback(
-    <K extends keyof VideoParams>(key: K, value: VideoParams[K]) =>
-      setVideoParams((p) => ({ ...p, [key]: value })),
-    [],
-  );
-
-  // Kling params
-  const [klingParams, setKlingParams] = useState<KlingParams>(DEFAULT_KLING_PARAMS);
-  const setKP = useCallback(
-    <K extends keyof KlingParams>(key: K, value: KlingParams[K]) =>
-      setKlingParams((p) => ({ ...p, [key]: value })),
-    [],
-  );
-
-  // Image params
-  const [imageParams, setImageParams] = useState<ImageParams>(DEFAULT_IMAGE_PARAMS);
-  const setIP = useCallback(
-    <K extends keyof ImageParams>(key: K, value: ImageParams[K]) =>
-      setImageParams((p) => ({ ...p, [key]: value })),
-    [],
-  );
-
-  // Reference media state (Veo)
-  const [referenceImages, setReferenceImages] = useState<MediaFile[]>([]);
-  const [startCard, setStartCard]             = useState<MediaFile | null>(null);
-  const [endCard, setEndCard]                 = useState<MediaFile | null>(null);
-
-  // Panel toggles
-  const [showMedia, setShowMedia]       = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-
-  // Submit
-  const [loading, setLoading] = useState(false);
-  const [error, setError]     = useState<string | null>(null);
-
-  const isVideo   = mode === "video";
-  const isKling   = isVideo && provider === "kling";
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!prompt.trim() || !effectiveBrandId) return;
-
-    setLoading(true);
+  // ── Step 1: Generate 3 reference images ─────────────────────────────────────
+  async function generateRefImages() {
+    if (!prompt.trim()) { setError("Please enter a prompt first."); return; }
     setError(null);
+    setPhase("gen-ref");
 
-    let req: GenerateRequest;
+    // Placeholder loading states
+    setRefImages([
+      { id: "r1", url: null, b64: null, loading: true },
+      { id: "r2", url: null, b64: null, loading: true },
+      { id: "r3", url: null, b64: null, loading: true },
+    ]);
 
-    if (isVideo && provider === "kling") {
-      req = {
-        brand_id:       effectiveBrandId,
-        mode:           "video",
-        model_provider: "kling",
-        user_prompt:    prompt.trim(),
-        enhance_prompt: enhancePrompt,
-        kling_params:   klingParams,
-      };
-    } else if (isVideo) {
-      const finalVideoParams: VideoParams = {
-        ...videoParams,
-        reference_images_b64: referenceImages.length > 0 ? referenceImages.map((r) => r.b64) : null,
-        start_card_b64:       startCard?.b64 ?? null,
-        end_card_b64:         endCard?.b64 ?? null,
-      };
-      req = {
-        brand_id:       effectiveBrandId,
-        mode:           "video",
-        model_provider: "veo",
-        user_prompt:    prompt.trim(),
-        enhance_prompt: enhancePrompt,
-        video_params:   finalVideoParams,
-      };
-    } else {
-      req = {
-        brand_id:       effectiveBrandId,
-        mode:           "image",
-        user_prompt:    prompt.trim(),
-        enhance_prompt: enhancePrompt,
-        image_params:   imageParams,
-      };
-    }
+    const req: GenerateRequest = {
+      prompt,
+      brand_id:           brand?.id,
+      mode:               "image",
+      use_gemini_enhance: gemini,
+      image_params: {
+        ...DEFAULT_IMAGE_PARAMS,
+        aspect_ratio: aspectRatio as ImageParams["aspect_ratio"],
+      },
+      reference_images_b64: uploadedRef ? [uploadedRef.b64] : undefined,
+      model_reference_image_b64: modelRef?.b64,
+    };
 
-    try {
-      const response = await generateAsset(req);
-      onGenerated(response);
-      setPrompt("");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Generation failed");
-    } finally {
-      setLoading(false);
-    }
+    // Fire 3 parallel image generations
+    const results = await Promise.allSettled([
+      generateAsset(req),
+      generateAsset(req),
+      generateAsset(req),
+    ]);
+
+    const images: RefImage[] = results.map((r, i) => {
+      if (r.status === "fulfilled") {
+        const url = r.value.image_url ?? r.value.image_urls?.[0] ?? null;
+        return { id: `r${i + 1}`, url, b64: null, loading: false };
+      }
+      return { id: `r${i + 1}`, url: null, b64: null, loading: false, error: String((r as PromiseRejectedResult).reason) };
+    });
+
+    setRefImages(images);
+    setPhase("pick-ref");
+
+    // Notify parent of image generation
+    results.forEach((r) => {
+      if (r.status === "fulfilled") onGenerated(r.value);
+    });
   }
 
-  const canSubmit = !loading && prompt.trim().length >= 10 && !!effectiveBrandId;
+  // ── Step 2: Animate selected reference into 2 videos ────────────────────────
+  async function animateReference() {
+    const ref = selectedRef ?? (uploadedRef ? { id: "u", url: null, b64: uploadedRef.b64, loading: false } : null);
+    if (!ref && !uploadedRef) { setError("Please select a reference image first."); return; }
+    setError(null);
+    setPhase("animating");
 
-  // ── Render ─────────────────────────────────────────────────────────────────────
+    // Convert URL → b64 if needed
+    let refB64: string | null = ref?.b64 ?? null;
+    if (!refB64 && ref?.url) {
+      try { refB64 = await urlToBase64(ref.url); }
+      catch { setError("Could not load the reference image. Try uploading it directly."); setPhase("pick-ref"); return; }
+    }
+    if (!refB64 && uploadedRef) refB64 = uploadedRef.b64;
+
+    // Init 2 video slots
+    setVideos([
+      { slotId: "v1", videoId: "", status: "PENDING", progress: 10 },
+      { slotId: "v2", videoId: "", status: "PENDING", progress: 10 },
+    ]);
+
+    const baseReq: GenerateRequest = {
+      prompt,
+      brand_id:           brand?.id,
+      mode:               "video",
+      provider,
+      use_gemini_enhance: gemini,
+      reference_images_b64: refB64 ? [refB64] : undefined,
+      model_reference_image_b64: modelRef?.b64,
+      start_card_b64:            startCard?.b64,
+      ...(provider === "veo"
+        ? {
+            video_params: {
+              ...DEFAULT_VIDEO_PARAMS,
+              model:         veoModel,
+              aspect_ratio:  aspectRatio as VideoParams["aspect_ratio"],
+              duration_seconds: duration,
+              camera_movement: cameraMove as VideoParams["camera_movement"],
+            },
+          }
+        : {
+            kling_params: {
+              ...DEFAULT_KLING_PARAMS,
+              model:        klingModel,
+              aspect_ratio: aspectRatio as KlingParams["aspect_ratio"],
+              duration:     duration,
+            },
+          }),
+    };
+
+    // Generate 2 videos in parallel
+    const results = await Promise.allSettled([
+      generateAsset(baseReq),
+      generateAsset(baseReq),
+    ]);
+
+    const newVideos: VideoResult[] = results.map((r, i) => {
+      if (r.status === "fulfilled") {
+        onGenerated(r.value);
+        return { slotId: `v${i + 1}`, videoId: r.value.video_id, status: r.value.status as VideoStatus, progress: 15 };
+      }
+      return { slotId: `v${i + 1}`, videoId: "", status: "FAILED", progress: 0, error: String((r as PromiseRejectedResult).reason) };
+    });
+    setVideos(newVideos);
+
+    // Poll for completion
+    startPolling(newVideos);
+  }
+
+  function startPolling(initialVideos: VideoResult[]) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    let vids = [...initialVideos];
+
+    pollRef.current = setInterval(async () => {
+      const pending = vids.filter((v) => v.videoId && (v.status === "PENDING" || v.status === "PROCESSING"));
+      if (!pending.length) {
+        clearInterval(pollRef.current!);
+        setPhase("done");
+        return;
+      }
+
+      const updates = await Promise.allSettled(pending.map((v) => getVideo(v.videoId)));
+
+      vids = vids.map((v) => {
+        const idx = pending.findIndex((p) => p.videoId === v.videoId);
+        if (idx === -1) return v;
+        const res = updates[idx];
+        if (res.status === "fulfilled") {
+          const vid = res.value;
+          return {
+            ...v,
+            status:   vid.status,
+            url:      vid.video_url,
+            progress: vid.status === "COMPLETED" ? 100 : Math.min(95, v.progress + 8),
+          };
+        }
+        return { ...v, progress: Math.min(95, v.progress + 4) };
+      });
+
+      setVideos([...vids]);
+
+      // Check if all done
+      const allDone = vids.every((v) => v.status === "COMPLETED" || v.status === "FAILED");
+      if (allDone) {
+        clearInterval(pollRef.current!);
+        setPhase("done");
+      }
+    }, 6000);
+  }
+
+  function reset() {
+    if (pollRef.current) clearInterval(pollRef.current);
+    setPhase("setup");
+    setRefImages([]);
+    setSelectedRef(null);
+    setVideos([]);
+    setError(null);
+  }
+
+  // ── Step index for indicator ─────────────────────────────────────────────────
+  const stepIndex = { setup: 0, "gen-ref": 1, "pick-ref": 1, animating: 2, done: 3 }[phase];
+
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-700/60 bg-slate-900/60 shadow-2xl shadow-black/40 backdrop-blur">
+    <>
+      <div className="flex flex-col h-full">
 
-      {/* ── Header ─────────────────────────────────────────────────────────────── */}
-      <div className="border-b border-slate-800 bg-gradient-to-r from-slate-900 to-slate-800/80 px-5 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 shadow-lg shadow-indigo-900/40">
-            <Wand2 className="h-5 w-5 text-white" />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-slate-100">Create with AI</h2>
-            <p className="text-[10px] text-slate-500">Google Veo 3.1 · Kling 3.0 · Imagen 3 · Gemini</p>
-          </div>
-        </div>
-      </div>
+        {/* ── Top header bar ──────────────────────────────────────────────── */}
+        <div className="border-b border-tt-border bg-tt-surface/80 backdrop-blur">
+          <div className="flex items-center justify-between px-6 pt-5 pb-4">
+            <div>
+              <h1 className="text-xl font-bold text-tt-text">Create with AI</h1>
+              <p className="text-xs text-tt-muted mt-0.5">TikTok-style brand video pipeline</p>
+            </div>
 
-      {/* ── Two-column layout ───────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-0 lg:grid-cols-[1fr_200px]">
-
-        {/* ── Left: Form ─────────────────────────────────────────────────────── */}
-        <form onSubmit={handleSubmit} className="space-y-5 border-r border-slate-800/60 p-5">
-
-          {/* Mode segmented control */}
-          <div className="flex rounded-xl border border-slate-700/60 bg-slate-800/60 p-1 gap-1">
-            <button
-              type="button"
-              onClick={() => setMode("video")}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition-all ${
-                isVideo
-                  ? "bg-indigo-600 text-white shadow shadow-indigo-900/50"
-                  : "text-slate-400 hover:text-slate-300"
-              }`}
-            >
-              <Film className="h-3.5 w-3.5" />
-              Generate Video
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("image")}
-              className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-2 text-xs font-semibold transition-all ${
-                !isVideo
-                  ? "bg-purple-600 text-white shadow shadow-purple-900/50"
-                  : "text-slate-400 hover:text-slate-300"
-              }`}
-            >
-              <ImageIcon className="h-3.5 w-3.5" />
-              Generate Image
-            </button>
-          </div>
-
-          {/* Provider selector — only relevant for video */}
-          {isVideo && (
-            <ProviderSelector value={provider} onChange={handleProviderChange} />
-          )}
-
-          {/* Brand selector */}
-          <div className="space-y-1.5">
-            <FieldLabel label="Brand" tooltip="Your brand defines visual identity, style guide, and reference images used in generation." />
-            {brands.length === 0 ? (
-              <p className="text-xs text-amber-400">⚠ Create a brand first using the Brand Dashboard.</p>
-            ) : (
-              <select
-                value={effectiveBrandId}
-                onChange={(e) => setSelectedBrandId(e.target.value)}
-                className="w-full rounded-lg border border-slate-700/60 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
-              >
-                {brands.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}{b.reference_images.length > 0 ? ` (${b.reference_images.length} ref)` : ""}
-                  </option>
-                ))}
-              </select>
-            )}
-            {selectedBrand && (selectedBrand.reference_images.length > 0 || selectedBrand.style_guide) && (
-              <div className="flex flex-wrap gap-1.5 pt-0.5">
-                {selectedBrand.reference_images.map((_, i) => (
-                  <span key={i} className="rounded-full border border-indigo-800/40 bg-indigo-900/30 px-2 py-0.5 text-[10px] text-indigo-400">
-                    🖼 Ref {i + 1}
-                  </span>
-                ))}
-                {selectedBrand.style_guide && (
-                  <span className="rounded-full border border-purple-800/40 bg-purple-900/30 px-2 py-0.5 text-[10px] text-purple-400">
-                    📋 Style guide
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* Prompt */}
-          <div className="space-y-1.5">
-            <FieldLabel
-              label={isVideo ? "Describe your video" : "Describe your image"}
-              tooltip="Write a clear scene description. Gemini will expand it into a rich cinematic prompt automatically."
-            />
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder={
-                isVideo
-                  ? "A chef in a modern kitchen preparing a vibrant salad, golden light streaming through the window…"
-                  : "A sleek product bottle on a marble surface, soft studio lighting, minimalist background…"
-              }
-              rows={3}
-              required
-              minLength={10}
-              maxLength={1000}
-              className="w-full resize-none rounded-lg border border-slate-700/60 bg-slate-800/80 px-3 py-2.5 text-xs text-slate-200 placeholder-slate-600 transition-colors focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
-            />
-            <div className="flex justify-between text-[10px] text-slate-600">
-              <span>{prompt.length < 10 && prompt.length > 0 ? `${10 - prompt.length} more chars required` : ""}</span>
-              <span>{prompt.length}/1000</span>
+            {/* Tab switcher */}
+            <div className="flex items-center gap-1 rounded-xl bg-tt-card border border-tt-border p-1">
+              {(["video", "image"] as TabMode[]).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => { setTabMode(m); reset(); }}
+                  className={clsx(
+                    "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition-all",
+                    tabMode === m
+                      ? "bg-tt-accent/15 text-tt-accent shadow-sm"
+                      : "text-tt-muted hover:text-tt-text"
+                  )}
+                >
+                  {m === "video" ? <Film size={15} /> : <ImageIcon size={15} />}
+                  {m === "video" ? "Generate Video" : "Generate Image"}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* ── VIDEO SETTINGS ─────────────────────────────────────────────────── */}
-          {isVideo && (
-            <div className="space-y-5">
+          {/* Step indicator */}
+          <StepIndicator
+            steps={tabMode === "video" ? ["Reference Image", "Animate", "Voiceover"] : ["Setup", "Generate", "Done"]}
+            current={stepIndex}
+          />
+        </div>
 
-              {/* ── Kling settings (shown when Kling is selected) ──────────────── */}
-              {isKling && (
-                <KlingPanel params={klingParams} onChange={setKP} />
-              )}
+        {/* ── Main pipeline area ───────────────────────────────────────────── */}
+        <div className="flex-1 overflow-y-auto bg-tt-bg px-6 py-6">
 
-              {/* ── Veo settings (shown when Veo is selected) ─────────────────── */}
-              {!isKling && (
-              <>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="mb-4 flex items-start gap-3 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3"
+            >
+              <AlertCircle size={16} className="mt-0.5 flex-shrink-0 text-red-400" />
+              <p className="text-sm text-red-300">{error}</p>
+              <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-200">
+                <X size={14} />
+              </button>
+            </motion.div>
+          )}
 
-              {/* Section: Model & Output */}
-              <div className="space-y-4 rounded-xl border border-slate-700/40 bg-slate-800/30 p-4">
-                <SectionLabel><Cpu className="h-3 w-3" />Model &amp; Output</SectionLabel>
+          <AnimatePresence mode="wait">
 
-                <VeoModelSelector
-                  value={videoParams.veo_model as VeoModel}
-                  onChange={(v) => setVP("veo_model", v)}
-                />
+            {/* ── PHASE: setup ─────────────────────────────────────────────── */}
+            {phase === "setup" && (
+              <motion.div
+                key="setup"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-5"
+              >
+                {/* Brand + Provider row */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-tt-muted">Brand</label>
+                    <select
+                      value={brand?.id ?? ""}
+                      onChange={(e) => setBrand(brands.find((b) => b.id === e.target.value) ?? null)}
+                      className="w-full rounded-xl border border-tt-border bg-tt-card px-3 py-2.5 text-sm text-tt-text focus:border-tt-accent/50 focus:outline-none focus:ring-1 focus:ring-tt-accent/30 transition-all"
+                    >
+                      <option value="">No brand</option>
+                      {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                    </select>
+                  </div>
 
-                <div className="grid grid-cols-3 gap-3">
-                  <PillGroup
-                    label="Duration"
-                    icon={Clock}
-                    tooltip="How long the generated video will be. Longer durations take more time."
-                    value={videoParams.duration}
-                    onChange={(v) => setVP("duration", v as 5 | 8 | 10)}
-                    options={VIDEO_DURATION_OPTIONS}
-                  />
-                  <PillGroup
-                    label="Aspect Ratio"
-                    icon={Maximize2}
-                    tooltip="Frame dimensions. 16:9 for widescreen, 9:16 for vertical Reels."
-                    value={videoParams.aspect_ratio}
-                    onChange={(v) => setVP("aspect_ratio", v as VideoParams["aspect_ratio"])}
-                    options={ASPECT_RATIO_OPTIONS}
-                  />
-                  <PillGroup
-                    label="Quality"
-                    icon={Star}
-                    tooltip="Output quality level. Ultra produces sharper results but takes longer."
-                    value={videoParams.quality}
-                    onChange={(v) => setVP("quality", v as VideoParams["quality"])}
-                    options={QUALITY_OPTIONS}
-                  />
-                </div>
-              </div>
-
-              {/* Section: Camera & Motion */}
-              <div className="space-y-4 rounded-xl border border-slate-700/40 bg-slate-800/30 p-4">
-                <SectionLabel><Camera className="h-3 w-3" />Camera &amp; Motion</SectionLabel>
-
-                <Select
-                  label="Camera Movement"
-                  icon={Camera}
-                  tooltip="How the virtual camera moves. Adds cinematic dynamism to the shot."
-                  value={videoParams.camera_movement}
-                  onChange={(v) => setVP("camera_movement", v as VideoParams["camera_movement"])}
-                  options={CAMERA_MOVEMENT_OPTIONS}
-                />
-
-                <MotionSlider
-                  value={videoParams.motion_strength}
-                  onChange={(v) => setVP("motion_strength", v)}
-                />
-              </div>
-
-              {/* Section: Look & Feel */}
-              <div className="space-y-4 rounded-xl border border-slate-700/40 bg-slate-800/30 p-4">
-                <SectionLabel><Palette className="h-3 w-3" />Look &amp; Feel</SectionLabel>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <Select
-                    label="Lighting Style"
-                    icon={Sun}
-                    tooltip="The primary lighting setup. Sets the mood and atmosphere."
-                    value={videoParams.lighting_style}
-                    onChange={(v) => setVP("lighting_style", v as VideoParams["lighting_style"])}
-                    options={LIGHTING_OPTIONS}
-                  />
-                  <Select
-                    label="Cinematic Style"
-                    icon={Palette}
-                    tooltip="The overall aesthetic treatment applied to the video."
-                    value={videoParams.visual_style}
-                    onChange={(v) => setVP("visual_style", v as VideoParams["visual_style"])}
-                    options={VISUAL_STYLE_OPTIONS}
-                  />
-                </div>
-              </div>
-
-              {/* Section: Reference Media (collapsible) */}
-              <div className="rounded-xl border border-slate-700/40 bg-slate-800/30">
-                <button
-                  type="button"
-                  onClick={() => setShowMedia(!showMedia)}
-                  className="flex w-full items-center justify-between px-4 py-3"
-                >
-                  <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                    <Upload className="h-3 w-3" />
-                    Reference Media
-                    {(referenceImages.length > 0 || startCard || endCard) && (
-                      <span className="rounded-full bg-indigo-900/50 px-1.5 py-0.5 text-[9px] text-indigo-400 border border-indigo-800/40">
-                        {[
-                          referenceImages.length > 0 && `${referenceImages.length} img`,
-                          startCard && "start",
-                          endCard && "end",
-                        ].filter(Boolean).join(" · ")}
-                      </span>
-                    )}
-                  </span>
-                  {showMedia
-                    ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" />
-                    : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
-                  }
-                </button>
-
-                {showMedia && (
-                  <div className="space-y-4 border-t border-slate-700/40 px-4 pb-4 pt-3">
-                    <p className="text-[10px] text-slate-500 leading-relaxed">
-                      Reference images condition Veo's visual output — the first image acts as the primary
-                      style guide. Start card defines the opening frame.
-                    </p>
-
-                    {/* Reference images (multi) */}
-                    <MultiImageDropZone
-                      files={referenceImages}
-                      onAdd={(mf) => setReferenceImages((prev) => [...prev, mf].slice(0, 4))}
-                      onRemove={(i) => setReferenceImages((prev) => prev.filter((_, idx) => idx !== i))}
-                      maxFiles={4}
-                    />
-
-                    {/* Start card / End card */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <ImageDropZone
-                        label="Start Card"
-                        icon={Play}
-                        tooltip="The opening frame. Highest priority conditioning image for Veo."
-                        file={startCard}
-                        onFile={(mf) => setStartCard(mf)}
-                        onClear={() => setStartCard(null)}
-                      />
-                      <ImageDropZone
-                        label="End Card"
-                        icon={SquarePlay}
-                        tooltip="Guides the desired closing scene. Included as a prompt hint."
-                        file={endCard}
-                        onFile={(mf) => setEndCard(mf)}
-                        onClear={() => setEndCard(null)}
-                      />
+                  <div className="space-y-2">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-tt-muted">AI Provider</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { value: "veo",  label: "Google Veo", color: "from-blue-500/20 to-blue-600/10 border-blue-500/30 text-blue-300" },
+                        { value: "kling",label: "Kling AI",   color: "from-emerald-500/20 to-emerald-600/10 border-emerald-500/30 text-emerald-300" },
+                      ].map((p) => (
+                        <button
+                          key={p.value}
+                          onClick={() => setProvider(p.value as ModelProvider)}
+                          className={clsx(
+                            "rounded-xl border px-3 py-2 text-xs font-semibold transition-all",
+                            provider === p.value
+                              ? `bg-gradient-to-br ${p.color}`
+                              : "border-tt-border bg-tt-card text-tt-muted hover:border-tt-dim"
+                          )}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                )}
-              </div>
+                </div>
 
-              {/* end !isKling Veo-only block */}
-              </>)}
-            </div>
-          )}
+                {/* Prompt */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold uppercase tracking-wider text-tt-muted">Prompt</label>
+                    <button
+                      onClick={() => setGemini((g) => !g)}
+                      className={clsx(
+                        "flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-all",
+                        gemini
+                          ? "bg-tt-accent/15 text-tt-accent"
+                          : "bg-tt-border text-tt-muted hover:text-tt-text"
+                      )}
+                    >
+                      <Sparkles size={11} />
+                      Gemini Enhance {gemini ? "ON" : "OFF"}
+                    </button>
+                  </div>
+                  <textarea
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    placeholder="Describe your video scene — a person holding a product, walking in a city, dancing…"
+                    rows={4}
+                    className="w-full resize-none rounded-xl border border-tt-border bg-tt-card px-4 py-3 text-sm text-tt-text placeholder-tt-muted focus:border-tt-accent/50 focus:outline-none focus:ring-1 focus:ring-tt-accent/30 transition-all"
+                  />
+                </div>
 
-          {/* ── IMAGE SETTINGS ─────────────────────────────────────────────────── */}
-          {!isVideo && (
-            <div className="space-y-4 rounded-xl border border-slate-700/40 bg-slate-800/30 p-4">
-              <SectionLabel><ImageIcon className="h-3 w-3" />Image Settings</SectionLabel>
+                {/* Reference Image section */}
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-tt-muted">Step 1 — Reference Image</p>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Select
-                  label="Aspect Ratio"
-                  icon={Maximize2}
-                  tooltip="16:9 for landscape, 9:16 for portrait, 1:1 for square."
-                  value={imageParams.aspect_ratio}
-                  onChange={(v) => setIP("aspect_ratio", v as ImageParams["aspect_ratio"])}
-                  options={ASPECT_RATIO_OPTIONS.filter((o) => o.value !== "21:9")}
-                />
-                <div className="space-y-1.5">
-                  <FieldLabel label="Number of Images" icon={Layers} tooltip="How many variations to generate." />
-                  <div className="flex gap-1.5">
-                    {IMAGE_COUNT_OPTIONS.map((o) => (
+                  {/* Upload reference */}
+                  <input
+                    ref={refFileRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0], setUploadedRef)}
+                  />
+
+                  {uploadedRef ? (
+                    <div className="relative h-40 w-full overflow-hidden rounded-xl border border-tt-accent/30">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={uploadedRef.objectUrl} alt="Reference" className="h-full w-full object-cover" />
                       <button
-                        key={o.value}
-                        type="button"
-                        onClick={() => setIP("number_of_images", o.value as 1 | 2 | 3 | 4)}
-                        className={`flex-1 rounded-lg py-2 text-xs font-semibold transition-all ${
-                          imageParams.number_of_images === o.value
-                            ? "bg-purple-600 text-white"
-                            : "border border-slate-700/60 bg-slate-800/60 text-slate-400 hover:border-slate-600"
-                        }`}
+                        onClick={() => setUploadedRef(null)}
+                        className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-black/60 text-white hover:bg-black/80"
                       >
-                        {o.label}
+                        <X size={12} />
                       </button>
+                      <div className="absolute bottom-0 left-0 right-0 image-card-overlay p-3">
+                        <p className="text-xs font-semibold text-white">Reference uploaded</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => refFileRef.current?.click()}
+                      className="flex w-full flex-col items-center gap-3 rounded-xl border border-dashed border-tt-border bg-tt-card/50 py-8 text-tt-muted hover:border-tt-accent/40 hover:bg-tt-card hover:text-tt-text transition-all"
+                    >
+                      <Upload size={22} />
+                      <div className="text-center">
+                        <p className="text-sm font-medium">Upload reference image</p>
+                        <p className="text-xs text-tt-muted">or generate 3 AI options below</p>
+                      </div>
+                    </button>
+                  )}
+
+                  {/* Optional extras */}
+                  <div className="grid grid-cols-2 gap-3">
+                    {[
+                      { label: "Model Reference (optional)", ref: modelFileRef, state: modelRef, setter: setModelRef },
+                      { label: "Start Card (optional)",      ref: startFileRef, state: startCard, setter: setStartCard },
+                    ].map(({ label, ref: inputRef, state, setter }) => (
+                      <div key={label}>
+                        <input
+                          ref={inputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={(e) => e.target.files?.[0] && handleFileUpload(e.target.files[0], setter)}
+                        />
+                        {state ? (
+                          <div className="relative h-20 overflow-hidden rounded-xl border border-tt-border">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={state.objectUrl} alt={label} className="h-full w-full object-cover" />
+                            <button
+                              onClick={() => setter(null)}
+                              className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white"
+                            >
+                              <X size={10} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => inputRef.current?.click()}
+                            className="flex h-20 w-full flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-tt-border bg-tt-card/30 text-tt-muted hover:border-tt-dim hover:text-tt-text transition-all"
+                          >
+                            <Upload size={16} />
+                            <span className="text-[11px] text-center leading-tight px-2">{label}</span>
+                          </button>
+                        )}
+                      </div>
                     ))}
                   </div>
                 </div>
-              </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <Select
-                  label="Style"
-                  icon={Palette}
-                  tooltip="The visual aesthetic of the generated image."
-                  value={imageParams.style}
-                  onChange={(v) => setIP("style", v as ImageParams["style"])}
-                  options={IMAGE_STYLE_OPTIONS}
-                />
-                <Select
-                  label="Quality"
-                  icon={Star}
-                  tooltip="Output fidelity. Ultra adds extra detail and sharpness."
-                  value={imageParams.quality}
-                  onChange={(v) => setIP("quality", v as ImageParams["quality"])}
-                  options={QUALITY_OPTIONS}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* ── Advanced options ────────────────────────────────────────────────── */}
-          <div className="rounded-xl border border-slate-700/40 bg-slate-800/30">
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex w-full items-center justify-between px-4 py-3"
-            >
-              <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
-                <Hash className="h-3 w-3" />Advanced Options
-              </span>
-              {showAdvanced
-                ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" />
-                : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
-              }
-            </button>
-
-            {showAdvanced && (
-              <div className="space-y-3 border-t border-slate-700/40 px-4 pb-4 pt-3">
-                {/* Seed */}
-                <div className="space-y-1.5">
-                  <FieldLabel label="Seed" icon={Hash} tooltip="Fixed seed for reproducible results. Leave blank for random." />
-                  <div className="flex gap-2">
-                    <input
-                      type="number"
-                      placeholder="Random"
-                      value={isVideo ? (videoParams.seed ?? "") : (imageParams.seed ?? "")}
-                      onChange={(e) => {
-                        const v = e.target.value ? Number(e.target.value) : null;
-                        isVideo ? setVP("seed", v) : setIP("seed", v);
-                      }}
-                      className="flex-1 rounded-lg border border-slate-700/60 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
+                {/* Advanced settings collapse */}
+                <div className="rounded-xl border border-tt-border bg-tt-card">
+                  <button
+                    onClick={() => setShowSettings((s) => !s)}
+                    className="flex w-full items-center justify-between px-4 py-3 text-sm font-semibold text-tt-text"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Camera size={15} className="text-tt-muted" />
+                      Advanced Settings
+                    </div>
+                    <ChevronDown
+                      size={16}
+                      className={clsx("text-tt-muted transition-transform", showSettings ? "rotate-180" : "")}
                     />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const v = Math.floor(Math.random() * 2147483647);
-                        isVideo ? setVP("seed", v) : setIP("seed", v);
-                      }}
-                      className="flex items-center gap-1.5 rounded-lg border border-slate-700/60 bg-slate-800/60 px-3 py-2 text-[10px] text-slate-400 hover:border-slate-600 hover:text-slate-300 transition-colors"
+                  </button>
+
+                  <AnimatePresence>
+                    {showSettings && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: "auto", opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="border-t border-tt-border px-4 pb-4 pt-3 space-y-4">
+                          {/* Model selector */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-tt-muted uppercase tracking-wider">
+                              {provider === "veo" ? "Veo Model" : "Kling Model"}
+                            </label>
+                            <div className="grid grid-cols-3 gap-2">
+                              {(provider === "veo" ? VEO_MODELS : KLING_MODELS).map((m) => (
+                                <button
+                                  key={m.value}
+                                  onClick={() => provider === "veo" ? setVeoModel(m.value as VeoModel) : setKlingModel(m.value)}
+                                  className={clsx(
+                                    "rounded-lg border px-2 py-2 text-left text-xs transition-all",
+                                    (provider === "veo" ? veoModel : klingModel) === m.value
+                                      ? "border-tt-accent/50 bg-tt-accent/10 text-tt-accent"
+                                      : "border-tt-border bg-tt-surface text-tt-muted hover:border-tt-dim"
+                                  )}
+                                >
+                                  <p className="font-semibold">{m.label}</p>
+                                  <p className="text-[10px] opacity-70">{m.badge}</p>
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+
+                          {/* Aspect ratio + Duration */}
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <label className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Aspect Ratio</label>
+                              <div className="flex flex-wrap gap-1.5">
+                                {ASPECT_RATIOS.map((r) => (
+                                  <button
+                                    key={r}
+                                    onClick={() => setAspectRatio(r)}
+                                    className={clsx(
+                                      "rounded-lg px-2.5 py-1.5 text-xs font-semibold border transition-all",
+                                      aspectRatio === r
+                                        ? "border-tt-accent/50 bg-tt-accent/10 text-tt-accent"
+                                        : "border-tt-border bg-tt-surface text-tt-muted hover:border-tt-dim"
+                                    )}
+                                  >
+                                    {r}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {tabMode === "video" && (
+                              <div className="space-y-2">
+                                <label className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Duration</label>
+                                <div className="flex gap-1.5">
+                                  {DURATIONS.map((d) => (
+                                    <button
+                                      key={d}
+                                      onClick={() => setDuration(d)}
+                                      className={clsx(
+                                        "rounded-lg px-3 py-1.5 text-xs font-semibold border transition-all",
+                                        duration === d
+                                          ? "border-tt-accent/50 bg-tt-accent/10 text-tt-accent"
+                                          : "border-tt-border bg-tt-surface text-tt-muted hover:border-tt-dim"
+                                      )}
+                                    >
+                                      {d}s
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Camera movement */}
+                          {tabMode === "video" && provider === "veo" && (
+                            <div className="space-y-2">
+                              <label className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Camera Movement</label>
+                              <div className="flex flex-wrap gap-1.5">
+                                {CAMERA_MOVES.map((m) => (
+                                  <button
+                                    key={m}
+                                    onClick={() => setCameraMove(m)}
+                                    className={clsx(
+                                      "rounded-lg px-2.5 py-1.5 text-xs font-semibold border capitalize transition-all",
+                                      cameraMove === m
+                                        ? "border-tt-accent/50 bg-tt-accent/10 text-tt-accent"
+                                        : "border-tt-border bg-tt-surface text-tt-muted hover:border-tt-dim"
+                                    )}
+                                  >
+                                    {m.replace("_", " ")}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* CTA */}
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={tabMode === "video" ? generateRefImages : generateRefImages}
+                  disabled={!prompt.trim()}
+                  className="btn-accent w-full flex items-center justify-center gap-2 rounded-xl py-4 text-sm font-bold"
+                >
+                  <Wand2 size={18} />
+                  Generate 3 Reference Images
+                </motion.button>
+              </motion.div>
+            )}
+
+            {/* ── PHASE: gen-ref (loading 3 images) ───────────────────────── */}
+            {phase === "gen-ref" && (
+              <motion.div
+                key="gen-ref"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-4"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="h-5 w-5 animate-spin rounded-full border-2 border-tt-accent border-t-transparent" />
+                  <p className="text-sm font-semibold text-tt-text">Generating reference images…</p>
+                  <span className="text-xs text-tt-muted">This may take 30–60s</span>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  {[0, 1, 2].map((i) => (
+                    <motion.div
+                      key={i}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: i * 0.1 }}
+                      className="aspect-video skeleton rounded-xl"
+                    />
+                  ))}
+                </div>
+                <p className="text-center text-xs text-tt-muted">
+                  Prompt: <span className="text-tt-text">{prompt}</span>
+                </p>
+              </motion.div>
+            )}
+
+            {/* ── PHASE: pick-ref (user selects image) ─────────────────────── */}
+            {phase === "pick-ref" && (
+              <motion.div
+                key="pick-ref"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-5"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-bold text-tt-text">Choose Your Reference</h2>
+                    <p className="text-xs text-tt-muted">Hover to select, then click Animate</p>
+                  </div>
+                  <button onClick={reset} className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-tt-muted hover:text-tt-text hover:bg-tt-card border border-tt-border transition-all">
+                    <RotateCcw size={13} /> Start over
+                  </button>
+                </div>
+
+                {/* 3 image cards */}
+                <div className="grid grid-cols-3 gap-3">
+                  {refImages.map((img, i) => (
+                    <motion.div
+                      key={img.id}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: i * 0.08 }}
+                      onClick={() => !img.loading && !img.error && setSelectedRef(img)}
+                      className={clsx(
+                        "group relative aspect-video cursor-pointer overflow-hidden rounded-xl border-2 transition-all duration-200",
+                        selectedRef?.id === img.id
+                          ? "border-tt-accent shadow-glow-accent"
+                          : "border-tt-border hover:border-tt-accent/60"
+                      )}
                     >
-                      <RefreshCw className="h-3 w-3" />Random
+                      {img.loading ? (
+                        <div className="skeleton h-full w-full" />
+                      ) : img.error ? (
+                        <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-red-950/30 text-red-400">
+                          <AlertCircle size={20} />
+                          <span className="text-[10px]">Failed</span>
+                        </div>
+                      ) : img.url ? (
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={img.url} alt={`Reference ${i + 1}`} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+
+                          {/* Hover overlay */}
+                          <div className="image-card-overlay absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex flex-col items-center justify-end pb-3">
+                            {selectedRef?.id === img.id ? (
+                              <span className="flex items-center gap-1 rounded-full bg-tt-accent px-3 py-1.5 text-xs font-bold text-black">
+                                <Check size={12} /> Selected
+                              </span>
+                            ) : (
+                              <span className="rounded-full bg-white/20 backdrop-blur-sm border border-white/20 px-3 py-1.5 text-xs font-semibold text-white">
+                                Select
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Selected checkmark */}
+                          {selectedRef?.id === img.id && (
+                            <div className="absolute right-2 top-2 flex h-6 w-6 items-center justify-center rounded-full bg-tt-accent">
+                              <Check size={12} className="text-black" />
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center bg-tt-card text-tt-muted">
+                          <ImageIcon size={24} />
+                        </div>
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+
+                {/* Regenerate option */}
+                <button
+                  onClick={generateRefImages}
+                  className="flex items-center gap-2 text-xs text-tt-muted hover:text-tt-text transition-colors"
+                >
+                  <RotateCcw size={13} /> Regenerate options
+                </button>
+
+                {/* Animate CTA */}
+                <motion.button
+                  whileTap={{ scale: 0.97 }}
+                  onClick={animateReference}
+                  disabled={!selectedRef && !uploadedRef}
+                  className="btn-accent w-full flex items-center justify-center gap-2 rounded-xl py-4 text-sm font-bold"
+                >
+                  <Film size={18} />
+                  Animate → Generate 2 Videos
+                </motion.button>
+              </motion.div>
+            )}
+
+            {/* ── PHASE: animating (video generation in progress) ──────────── */}
+            {phase === "animating" && (
+              <motion.div
+                key="animating"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-5"
+              >
+                <div>
+                  <h2 className="text-base font-bold text-tt-text">Generating your videos…</h2>
+                  <p className="text-xs text-tt-muted mt-1">This may take 1–3 minutes. You can leave this tab open.</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {videos.map((v, i) => (
+                    <motion.div
+                      key={v.slotId}
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      transition={{ delay: i * 0.12 }}
+                      className="overflow-hidden rounded-xl border border-tt-border bg-tt-card"
+                    >
+                      {/* Video placeholder with progress */}
+                      <div className="aspect-video flex flex-col items-center justify-center gap-4 bg-tt-surface">
+                        {v.status === "FAILED" ? (
+                          <div className="flex flex-col items-center gap-2 text-red-400">
+                            <AlertCircle size={24} />
+                            <p className="text-xs text-center">{v.error ?? "Generation failed"}</p>
+                          </div>
+                        ) : (
+                          <>
+                            <CircularProgress value={v.progress} size={72} />
+                            <div className="text-center">
+                              <p className="text-xs font-semibold text-tt-text">Video {i + 1}</p>
+                              <p className="text-[11px] text-tt-muted capitalize">{v.status.toLowerCase()}…</p>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <div className="px-4 py-3 flex items-center gap-2">
+                        {v.status !== "FAILED" && (
+                          <Loader2 size={14} className="animate-spin text-tt-accent" />
+                        )}
+                        <p className="text-xs text-tt-muted">
+                          {v.status === "FAILED" ? "Failed" : `~${Math.round((100 - v.progress) / 10)} min remaining`}
+                        </p>
+                      </div>
+                    </motion.div>
+                  ))}
+                </div>
+
+                {/* Selected reference thumbnail */}
+                {(selectedRef?.url || uploadedRef) && (
+                  <div className="flex items-center gap-3 rounded-xl border border-tt-border bg-tt-card p-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={selectedRef?.url ?? uploadedRef!.objectUrl}
+                      alt="Approved reference"
+                      className="h-14 w-24 rounded-lg object-cover border border-tt-border"
+                    />
+                    <div>
+                      <p className="text-xs font-semibold text-tt-accent">Approved Reference</p>
+                      <p className="text-[11px] text-tt-muted mt-0.5">Animating with {provider === "veo" ? veoModel : klingModel}</p>
+                    </div>
+                  </div>
+                )}
+              </motion.div>
+            )}
+
+            {/* ── PHASE: done (videos ready) ───────────────────────────────── */}
+            {phase === "done" && (
+              <motion.div
+                key="done"
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -16 }}
+                className="space-y-5"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-bold text-tt-text">Your Videos Are Ready!</h2>
+                    <p className="text-xs text-tt-muted mt-1">Hover a video to add voiceover or download</p>
+                  </div>
+                  <button onClick={reset} className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs text-tt-muted hover:text-tt-text hover:bg-tt-card border border-tt-border transition-all">
+                    <RotateCcw size={13} /> New creation
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  {videos.map((v, i) => (
+                    <VideoResultCard
+                      key={v.slotId}
+                      video={v}
+                      index={i}
+                      onVoiceover={() => { setVoiceoverVideo(v); setVoiceoverOpen(true); }}
+                    />
+                  ))}
+                </div>
+
+                {/* Approved reference */}
+                {(selectedRef?.url || uploadedRef) && (
+                  <div className="flex items-center gap-3 rounded-xl border border-tt-accent/20 bg-tt-accent/5 p-3">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={selectedRef?.url ?? uploadedRef!.objectUrl}
+                      alt="Reference used"
+                      className="h-14 w-24 rounded-lg object-cover border border-tt-border"
+                    />
+                    <div className="flex-1">
+                      <p className="text-xs font-semibold text-tt-accent">Approved Reference Used</p>
+                      <p className="text-[11px] text-tt-muted mt-0.5 line-clamp-2">{prompt}</p>
+                    </div>
+                    <button
+                      onClick={reset}
+                      className="btn-accent flex items-center gap-1.5 rounded-xl px-4 py-2 text-xs font-bold"
+                    >
+                      <Wand2 size={13} /> New
                     </button>
                   </div>
-                </div>
-
-                {/* Negative prompt */}
-                <div className="space-y-1.5">
-                  <FieldLabel label="Negative Prompt" icon={Ban} tooltip="What to exclude: e.g. 'blurry, text overlays, watermarks, distorted faces'." />
-                  <textarea
-                    value={isVideo ? (videoParams.negative_prompt ?? "") : (imageParams.negative_prompt ?? "")}
-                    onChange={(e) => {
-                      const v = e.target.value || null;
-                      isVideo ? setVP("negative_prompt", v) : setIP("negative_prompt", v);
-                    }}
-                    placeholder="blurry, watermarks, text overlays, distorted faces, low quality…"
-                    rows={2}
-                    maxLength={500}
-                    className="w-full resize-none rounded-lg border border-slate-700/60 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
-                  />
-                </div>
-              </div>
+                )}
+              </motion.div>
             )}
-          </div>
 
-          {/* ── Gemini toggles ─────────────────────────────────────────────────── */}
-          <div className="space-y-2.5 rounded-xl border border-slate-700/40 bg-slate-800/30 p-4">
-            <Toggle
-              checked={enhancePrompt}
-              onChange={setEnhancePrompt}
-              label="Enhance with Gemini"
-              description="Expands your prompt into a rich cinematic description"
-            />
-            {enhancePrompt && (
-              <Toggle
-                checked={false}
-                onChange={(raw) => setEnhancePrompt(!raw)}
-                label="Raw Mode"
-                description="Send your prompt exactly as written, no AI expansion"
-              />
-            )}
-            {!enhancePrompt && (
-              <div className="flex items-center gap-2 rounded-lg bg-amber-900/20 border border-amber-800/30 px-3 py-2">
-                <Zap className="h-3 w-3 text-amber-400 flex-shrink-0" />
-                <span className="text-[10px] text-amber-300">
-                  Raw mode: prompt sent directly to {isVideo ? "Veo" : "Imagen"}.
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Error */}
-          {error && (
-            <div className="rounded-xl border border-red-800/40 bg-red-900/20 p-3 text-xs text-red-400">
-              {error}
-            </div>
-          )}
-
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3.5 text-sm font-bold text-white shadow-lg transition-all disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-600 disabled:shadow-none ${
-              !isVideo
-                ? "bg-gradient-to-r from-purple-600 to-purple-700 shadow-purple-900/40 hover:from-purple-500 hover:to-purple-600"
-                : isKling
-                  ? "bg-gradient-to-r from-emerald-600 to-emerald-700 shadow-emerald-900/40 hover:from-emerald-500 hover:to-emerald-600"
-                  : "bg-gradient-to-r from-indigo-600 to-indigo-700 shadow-indigo-900/40 hover:from-indigo-500 hover:to-indigo-600"
-            }`}
-          >
-            {loading ? (
-              <>
-                <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                {!isVideo
-                  ? "Generating with Imagen…"
-                  : isKling
-                    ? "Submitting to Kling…"
-                    : "Submitting to Veo…"
-                }
-              </>
-            ) : (
-              <>
-                <Send className="h-4 w-4" />
-                {!isVideo
-                  ? "Generate Image"
-                  : isKling
-                    ? "Generate with Kling 3.0"
-                    : "Generate with Veo"
-                }
-              </>
-            )}
-          </button>
-        </form>
-
-        {/* ── Right: live preview ─────────────────────────────────────────────── */}
-        <div className="p-4">
-          <PreviewCard
-            mode={mode}
-            videoParams={videoParams}
-            imageParams={imageParams}
-            enhancePrompt={enhancePrompt}
-            prompt={prompt}
-            refImageCount={referenceImages.length}
-            hasStartCard={!!startCard}
-            hasEndCard={!!endCard}
-          />
+          </AnimatePresence>
         </div>
       </div>
-    </div>
+
+      {/* Voiceover modal */}
+      <VoiceoverModal
+        open={voiceoverOpen}
+        onClose={() => setVoiceoverOpen(false)}
+        videoUrl={voiceoverVideo?.url}
+      />
+    </>
+  );
+}
+
+// ── VideoResultCard sub-component ─────────────────────────────────────────────
+
+function VideoResultCard({
+  video,
+  index,
+  onVoiceover,
+}: {
+  video: VideoResult;
+  index: number;
+  onVoiceover: () => void;
+}) {
+  const [playing, setPlaying] = useState(false);
+  const [hovered, setHovered] = useState(false);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ delay: index * 0.1 }}
+      onHoverStart={() => setHovered(true)}
+      onHoverEnd={() => setHovered(false)}
+      className="group overflow-hidden rounded-xl border border-tt-border bg-tt-card transition-all duration-300 hover:border-tt-accent/40 hover:shadow-card-hover"
+    >
+      {/* Video area */}
+      <div className="relative aspect-video bg-tt-surface">
+        {video.status === "COMPLETED" && video.url ? (
+          playing ? (
+            <video
+              src={video.url}
+              autoPlay
+              controls
+              className="h-full w-full object-cover"
+              onEnded={() => setPlaying(false)}
+            />
+          ) : (
+            <div className="relative h-full w-full">
+              <div className="h-full w-full bg-gradient-to-br from-tt-surface to-tt-card" />
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
+                <button
+                  onClick={() => setPlaying(true)}
+                  className="flex h-14 w-14 items-center justify-center rounded-full bg-white/10 backdrop-blur-sm border border-white/20 hover:bg-white/20 transition-all hover:scale-110"
+                >
+                  <Play size={22} className="ml-1 text-white" />
+                </button>
+                <p className="text-xs font-semibold text-tt-accent">Video {index + 1} Ready</p>
+              </div>
+
+              {/* Hover overlay with actions */}
+              <AnimatePresence>
+                {hovered && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 image-card-overlay flex flex-col items-center justify-end pb-4 gap-2"
+                  >
+                    <motion.button
+                      initial={{ y: 12, opacity: 0 }}
+                      animate={{ y: 0, opacity: 1 }}
+                      exit={{ y: 12, opacity: 0 }}
+                      onClick={onVoiceover}
+                      className="flex items-center gap-2 rounded-full bg-tt-accent px-4 py-2 text-xs font-bold text-black hover:shadow-glow-accent transition-all"
+                    >
+                      <Mic size={13} />
+                      Add Voiceover
+                    </motion.button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )
+        ) : video.status === "FAILED" ? (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-2 text-red-400">
+            <AlertCircle size={24} />
+            <p className="text-xs">{video.error ?? "Generation failed"}</p>
+          </div>
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3">
+            <CircularProgress value={video.progress} size={60} />
+            <p className="text-xs text-tt-muted capitalize">{video.status.toLowerCase()}…</p>
+          </div>
+        )}
+      </div>
+
+      {/* Card footer */}
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-2">
+          {video.status === "COMPLETED" ? (
+            <span className="flex items-center gap-1 text-[11px] font-semibold text-tt-accent">
+              <Check size={12} /> Ready
+            </span>
+          ) : video.status === "FAILED" ? (
+            <span className="flex items-center gap-1 text-[11px] font-semibold text-red-400">
+              <AlertCircle size={12} /> Failed
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 text-[11px] text-tt-muted">
+              <Clock size={12} /> Processing
+            </span>
+          )}
+        </div>
+        {video.status === "COMPLETED" && video.url && (
+          <a
+            href={video.url}
+            download
+            className="flex items-center gap-1 text-[11px] text-tt-muted hover:text-tt-text transition-colors"
+          >
+            <Download size={13} /> Download
+          </a>
+        )}
+      </div>
+    </motion.div>
   );
 }
