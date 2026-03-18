@@ -22,7 +22,8 @@ class Settings(BaseSettings):
     # Google Cloud Storage
     GCS_BUCKET_NAME: str
     GCS_PROJECT_ID: Optional[str] = None
-    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None
+    GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None  # path to JSON key file
+    GCS_CREDENTIALS_JSON: Optional[str] = None            # raw JSON string (preferred for cloud deployments)
 
     # App
     CORS_ORIGINS: str = "http://localhost:3000"

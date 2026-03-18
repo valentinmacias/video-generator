@@ -15,7 +15,15 @@ _gcs_client: Optional[storage.Client] = None
 def get_gcs_client() -> storage.Client:
     global _gcs_client
     if _gcs_client is None:
-        if settings.GOOGLE_APPLICATION_CREDENTIALS:
+        if settings.GCS_CREDENTIALS_JSON:
+            import json
+            info = json.loads(settings.GCS_CREDENTIALS_JSON)
+            creds = service_account.Credentials.from_service_account_info(
+                info,
+                scopes=["https://www.googleapis.com/auth/cloud-platform"],
+            )
+            _gcs_client = storage.Client(credentials=creds, project=settings.GCS_PROJECT_ID or info.get("project_id"))
+        elif settings.GOOGLE_APPLICATION_CREDENTIALS:
             _gcs_client = storage.Client.from_service_account_json(
                 settings.GOOGLE_APPLICATION_CREDENTIALS,
                 project=settings.GCS_PROJECT_ID,
