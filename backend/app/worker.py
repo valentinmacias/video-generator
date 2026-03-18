@@ -14,6 +14,7 @@ from .database import (
     update_video_failed,
 )
 from .veo_client import poll_operation
+from .kling_client import poll_kling_task
 from .storage import save_video_bytes, upload_video_from_uri
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,11 @@ async def _process_one_video(video: dict) -> None:
     operation_name = video["operation_id"]
 
     logger.debug(f"Polling video {video_id} | operation={operation_name}")
-    result = await poll_operation(operation_name)
+    # Route to the correct poller based on operation prefix
+    if operation_name.startswith("kling:"):
+        result = await poll_kling_task(operation_name)
+    else:
+        result = await poll_operation(operation_name)
 
     if not result["done"]:
         return  # Still processing — try again next cycle

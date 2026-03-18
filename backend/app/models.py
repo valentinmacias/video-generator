@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Literal, Union
+from typing import Optional, List, Literal
 from enum import Enum
 from datetime import datetime
 
@@ -134,6 +134,25 @@ class ImageParams(BaseModel):
     negative_prompt:  Optional[str] = Field(None, max_length=500)
 
 
+# ── Kling parameter model ──────────────────────────────────────────────────────
+
+class KlingParams(BaseModel):
+    """Tunable parameters for Kling AI video generation."""
+    kling_model:             str           = "kling-3.0"
+    duration:                Literal[5, 10] = 5
+    aspect_ratio:            AspectRatio   = AspectRatio.WIDE
+    cfg_scale:               float         = Field(0.5, ge=0.0, le=1.0,
+                                                   description="Subject/prompt adherence (0=creative, 1=strict)")
+    motion_intensity:        float         = Field(0.5, ge=0.0, le=1.0,
+                                                   description="Motion intensity (>0.5 enables pro mode)")
+    negative_prompt:         Optional[str] = Field(None, max_length=500)
+    # Base64-encoded images for conditioning / subject consistency
+    conditioning_image_b64:  Optional[str] = Field(None,
+        description="First-frame conditioning image (triggers image-to-video)")
+    reference_image_b64:     Optional[str] = Field(None,
+        description="Reference image/frame for UGC subject consistency")
+
+
 # ── Unified generation request ─────────────────────────────────────────────────
 
 class GenerateRequest(BaseModel):
@@ -141,17 +160,23 @@ class GenerateRequest(BaseModel):
     Unified request for both video and image generation.
     Set `mode` to select the generation type, then populate either
     `video_params` or `image_params` (the other is ignored).
+    Set `model_provider` to route between Veo and Kling for video generation.
     """
     brand_id:                str
     mode:                    GenerationMode = GenerationMode.VIDEO
+    model_provider:          Literal["veo", "kling"] = "veo"
     user_prompt:             str            = Field(..., min_length=10, max_length=1000)
     enhance_prompt:          bool           = True   # False = raw mode, skip Gemini
     additional_instructions: Optional[str]  = Field(None, max_length=500)
-    video_params:            Optional[VideoParams] = None
-    image_params:            Optional[ImageParams] = None
+    video_params:            Optional[VideoParams]  = None
+    kling_params:            Optional[KlingParams]  = None
+    image_params:            Optional[ImageParams]  = None
 
     def effective_video_params(self) -> VideoParams:
         return self.video_params or VideoParams()
+
+    def effective_kling_params(self) -> KlingParams:
+        return self.kling_params or KlingParams()
 
     def effective_image_params(self) -> ImageParams:
         return self.image_params or ImageParams()

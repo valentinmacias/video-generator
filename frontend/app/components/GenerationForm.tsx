@@ -5,12 +5,13 @@ import {
   Sparkles, Send, Film, ImageIcon, Info, ChevronDown, ChevronUp,
   Wand2, Eye, EyeOff, Zap, Clock, Maximize2, Camera, Wind,
   Sun, Palette, Star, Hash, Ban, Layers, Upload, X, Video,
-  Cpu, RefreshCw, Play, SquarePlay,
+  Cpu, RefreshCw, Play, SquarePlay, AlertTriangle, Sliders,
+  Users, Clapperboard,
 } from "lucide-react";
 import {
   Brand, GenerateResponse, GenerateRequest,
-  VideoParams, ImageParams,
-  DEFAULT_VIDEO_PARAMS, DEFAULT_IMAGE_PARAMS,
+  VideoParams, ImageParams, KlingParams, ModelProvider,
+  DEFAULT_VIDEO_PARAMS, DEFAULT_IMAGE_PARAMS, DEFAULT_KLING_PARAMS,
   GenerationMode, VeoModel, MotionStrength,
   generateAsset, fileToBase64,
 } from "../lib/api";
@@ -29,6 +30,35 @@ interface MediaFile {
 }
 
 // ── Option lists ─────────────────────────────────────────────────────────────────
+
+// ── Provider + model options ──────────────────────────────────────────────────────
+
+const PROVIDER_OPTIONS: {
+  value: ModelProvider; label: string; badge: string; badgeColor: string;
+  desc: string; warning?: string;
+}[] = [
+  {
+    value:      "veo",
+    label:      "Google Veo 3.1",
+    badge:      "Cinematic quality",
+    badgeColor: "bg-blue-900/50 text-blue-300 border-blue-800/40",
+    desc:       "Google's flagship model — highest fidelity, best for polished brand content",
+    warning:    "Strict safety filters active",
+  },
+  {
+    value:      "kling",
+    label:      "Kling 3.0",
+    badge:      "Best for UGC & B-rolls",
+    badgeColor: "bg-emerald-900/50 text-emerald-300 border-emerald-800/40",
+    desc:       "Excels at realistic UGC-style content and subject consistency from reference images",
+  },
+];
+
+const KLING_MODEL_OPTIONS = [
+  { value: "kling-3.0", label: "Kling 3.0", badge: "Latest",       desc: "Most powerful, best realism" },
+  { value: "kling-2.1", label: "Kling 2.1", badge: "Master",       desc: "Previous gen, fast & stable" },
+  { value: "kling-1.5", label: "Kling 1.5", badge: "Fast & Light", desc: "Lightweight, quick iterations" },
+];
 
 const VEO_MODEL_OPTIONS: { value: VeoModel; label: string; badge: string; desc: string }[] = [
   {
@@ -517,6 +547,270 @@ function VeoModelSelector({
   );
 }
 
+// ── Generation provider selector ──────────────────────────────────────────────────
+
+function ProviderSelector({
+  value, onChange,
+}: { value: ModelProvider; onChange: (v: ModelProvider) => void }) {
+  return (
+    <div className="space-y-1.5">
+      <FieldLabel
+        label="Generation Provider"
+        icon={Clapperboard}
+        tooltip="Choose which AI model generates the video. Kling 3.0 excels at copying UGC subject style; Veo produces the highest cinematic quality."
+      />
+      <div className="grid grid-cols-1 gap-2">
+        {PROVIDER_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            className={`flex items-start justify-between rounded-lg border px-3 py-2.5 text-left transition-all ${
+              value === opt.value
+                ? opt.value === "kling"
+                  ? "border-emerald-600/60 bg-emerald-900/20 ring-1 ring-emerald-600/40"
+                  : "border-indigo-600/60 bg-indigo-900/30 ring-1 ring-indigo-600/40"
+                : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600 hover:bg-slate-800/60"
+            }`}
+          >
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-semibold text-slate-200">{opt.label}</span>
+                <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-semibold ${opt.badgeColor}`}>
+                  {opt.badge}
+                </span>
+              </div>
+              <p className="mt-0.5 text-[10px] text-slate-500 leading-relaxed">{opt.desc}</p>
+              {opt.warning && (
+                <div className="mt-1 flex items-center gap-1">
+                  <AlertTriangle className="h-2.5 w-2.5 text-amber-500 flex-shrink-0" />
+                  <span className="text-[9px] text-amber-500">{opt.warning}</span>
+                </div>
+              )}
+            </div>
+            {value === opt.value && (
+              <div className={`ml-2 mt-1 h-2 w-2 rounded-full flex-shrink-0 ${opt.value === "kling" ? "bg-emerald-400" : "bg-indigo-400"}`} />
+            )}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Kling settings panel ───────────────────────────────────────────────────────────
+
+function KlingSlider({
+  label, tooltip, icon: Icon, value, onChange, min = 0, max = 1, step = 0.05,
+  formatValue,
+}: {
+  label: string; tooltip?: string; icon?: React.ElementType;
+  value: number; onChange: (v: number) => void;
+  min?: number; max?: number; step?: number;
+  formatValue?: (v: number) => string;
+}) {
+  const pct = ((value - min) / (max - min)) * 100;
+  const display = formatValue ? formatValue(value) : `${Math.round(value * 100)}%`;
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <FieldLabel label={label} tooltip={tooltip} icon={Icon} />
+        <span className="rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300">
+          {display}
+        </span>
+      </div>
+      <div className="space-y-1 rounded-lg border border-slate-700/60 bg-slate-800/60 px-4 py-3">
+        <input
+          type="range" min={min} max={max} step={step} value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          className="kling-slider w-full cursor-pointer accent-emerald-500"
+        />
+        <div className="flex justify-between text-[9px] text-slate-600">
+          <span>{min === 0 ? "Off / Creative" : String(min)}</span>
+          <span>{max === 1 ? "Max / Strict" : String(max)}</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KlingPanel({
+  params, onChange,
+}: {
+  params: KlingParams;
+  onChange: <K extends keyof KlingParams>(k: K, v: KlingParams[K]) => void;
+}) {
+  const [showKlingRef, setShowKlingRef] = useState(false);
+  const [refImage, setRefImage]         = useState<MediaFile | null>(null);
+  const [condImage, setCondImage]       = useState<MediaFile | null>(null);
+
+  function setRef(mf: MediaFile) {
+    setRefImage(mf);
+    onChange("reference_image_b64", mf.b64);
+  }
+  function clearRef() {
+    setRefImage(null);
+    onChange("reference_image_b64", null);
+  }
+  function setCond(mf: MediaFile) {
+    setCondImage(mf);
+    onChange("conditioning_image_b64", mf.b64);
+  }
+  function clearCond() {
+    setCondImage(null);
+    onChange("conditioning_image_b64", null);
+  }
+
+  return (
+    <div className="space-y-4 rounded-xl border border-emerald-800/30 bg-emerald-900/10 p-4">
+
+      {/* Header badge */}
+      <div className="flex items-center gap-2">
+        <span className="rounded-full border border-emerald-700/40 bg-emerald-900/40 px-2.5 py-0.5 text-[10px] font-bold text-emerald-300">
+          Kling 3.0 — Best for copying existing UGC style
+        </span>
+      </div>
+
+      {/* Model */}
+      <div className="space-y-1.5">
+        <FieldLabel label="Kling Model" icon={Cpu} tooltip="Select Kling model version. 3.0 is the most powerful." />
+        <div className="grid grid-cols-1 gap-1.5">
+          {KLING_MODEL_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => onChange("kling_model", opt.value)}
+              className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left transition-all ${
+                params.kling_model === opt.value
+                  ? "border-emerald-600/60 bg-emerald-900/30 ring-1 ring-emerald-600/30"
+                  : "border-slate-700/60 bg-slate-800/40 hover:border-slate-600"
+              }`}
+            >
+              <div>
+                <span className="text-xs font-semibold text-slate-200">{opt.label}</span>
+                <span className="ml-2 rounded-full bg-slate-700/60 px-1.5 py-0.5 text-[9px] font-medium text-slate-400">
+                  {opt.badge}
+                </span>
+                <p className="text-[10px] text-slate-500 mt-0.5">{opt.desc}</p>
+              </div>
+              {params.kling_model === opt.value && (
+                <div className="ml-2 h-2 w-2 rounded-full bg-emerald-400 flex-shrink-0" />
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Duration + Aspect */}
+      <div className="grid grid-cols-2 gap-3">
+        <PillGroup
+          label="Duration"
+          icon={Clock}
+          tooltip="Kling supports 5 or 10 second clips."
+          value={params.duration}
+          onChange={(v) => onChange("duration", v as 5 | 10)}
+          options={[{ value: 5, label: "5s", desc: "Short" }, { value: 10, label: "10s", desc: "Extended" }]}
+        />
+        <PillGroup
+          label="Aspect Ratio"
+          icon={Maximize2}
+          tooltip="Frame dimensions. 9:16 for vertical Reels."
+          value={params.aspect_ratio}
+          onChange={(v) => onChange("aspect_ratio", v as KlingParams["aspect_ratio"])}
+          options={[
+            { value: "16:9", label: "16:9" },
+            { value: "9:16", label: "9:16" },
+            { value: "1:1",  label: "1:1"  },
+          ]}
+        />
+      </div>
+
+      {/* Subject consistency + Motion intensity */}
+      <KlingSlider
+        label="Subject Consistency"
+        icon={Users}
+        tooltip="How strictly the video follows subject/style from your reference. Higher = more faithful to reference."
+        value={params.cfg_scale}
+        onChange={(v) => onChange("cfg_scale", v)}
+      />
+
+      <KlingSlider
+        label="Motion Intensity"
+        icon={Wind}
+        tooltip="Overall motion energy. Below 50% = Standard mode (calm). Above 50% = Pro mode (dynamic)."
+        value={params.motion_intensity}
+        onChange={(v) => onChange("motion_intensity", v)}
+        formatValue={(v) => v > 0.5 ? `${Math.round(v * 100)}% (Pro)` : `${Math.round(v * 100)}% (Std)`}
+      />
+
+      {/* Reference media */}
+      <div className="rounded-xl border border-slate-700/40 bg-slate-800/30">
+        <button
+          type="button"
+          onClick={() => setShowKlingRef(!showKlingRef)}
+          className="flex w-full items-center justify-between px-4 py-3"
+        >
+          <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-slate-500">
+            <Upload className="h-3 w-3" />
+            Reference Media
+            {(refImage || condImage) && (
+              <span className="rounded-full bg-emerald-900/50 px-1.5 py-0.5 text-[9px] text-emerald-400 border border-emerald-800/40">
+                {[refImage && "ref", condImage && "start"].filter(Boolean).join(" · ")}
+              </span>
+            )}
+          </span>
+          {showKlingRef
+            ? <ChevronUp className="h-3.5 w-3.5 text-slate-500" />
+            : <ChevronDown className="h-3.5 w-3.5 text-slate-500" />
+          }
+        </button>
+
+        {showKlingRef && (
+          <div className="space-y-4 border-t border-slate-700/40 px-4 pb-4 pt-3">
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              Upload a frame from your source UGC to match its subject/style, or a conditioning image
+              to pin the opening frame (triggers image-to-video mode).
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <ImageDropZone
+                label="UGC Reference Frame"
+                icon={Users}
+                tooltip="A frame from your source UGC video. Kling uses this for subject/style consistency across the generated clip."
+                file={refImage}
+                onFile={setRef}
+                onClear={clearRef}
+              />
+              <ImageDropZone
+                label="Start Frame"
+                icon={Play}
+                tooltip="Pin the opening frame of the video (switches to image-to-video mode)."
+                file={condImage}
+                onFile={setCond}
+                onClear={clearCond}
+              />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Negative prompt */}
+      <div className="space-y-1.5">
+        <FieldLabel label="Negative Prompt" icon={Ban} tooltip="What to exclude from the video." />
+        <textarea
+          value={params.negative_prompt ?? ""}
+          onChange={(e) => onChange("negative_prompt", e.target.value || null)}
+          placeholder="blurry, watermarks, text overlays, distorted faces, low quality…"
+          rows={2}
+          maxLength={500}
+          className="w-full resize-none rounded-lg border border-slate-700/60 bg-slate-800/80 px-3 py-2 text-xs text-slate-200 placeholder-slate-600 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+        />
+      </div>
+    </div>
+  );
+}
+
+
 // ── Live preview panel ─────────────────────────────────────────────────────────────
 
 function PreviewCard({
@@ -645,6 +939,22 @@ function PreviewCard({
 export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
   const [mode, setMode] = useState<GenerationMode>("video");
 
+  // Provider — persisted in localStorage
+  const [provider, setProvider] = useState<ModelProvider>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("vbg_provider");
+      if (saved === "kling" || saved === "veo") return saved;
+    }
+    return "veo";
+  });
+
+  function handleProviderChange(v: ModelProvider) {
+    setProvider(v);
+    if (typeof window !== "undefined") {
+      localStorage.setItem("vbg_provider", v);
+    }
+  }
+
   // Brand
   const [selectedBrandId, setSelectedBrandId] = useState("");
   const effectiveBrandId = selectedBrandId || brands[0]?.id || "";
@@ -654,11 +964,19 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
   const [prompt, setPrompt] = useState("");
   const [enhancePrompt, setEnhancePrompt] = useState(true);
 
-  // Video params
+  // Veo video params
   const [videoParams, setVideoParams] = useState<VideoParams>(DEFAULT_VIDEO_PARAMS);
   const setVP = useCallback(
     <K extends keyof VideoParams>(key: K, value: VideoParams[K]) =>
       setVideoParams((p) => ({ ...p, [key]: value })),
+    [],
+  );
+
+  // Kling params
+  const [klingParams, setKlingParams] = useState<KlingParams>(DEFAULT_KLING_PARAMS);
+  const setKP = useCallback(
+    <K extends keyof KlingParams>(key: K, value: KlingParams[K]) =>
+      setKlingParams((p) => ({ ...p, [key]: value })),
     [],
   );
 
@@ -670,7 +988,7 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
     [],
   );
 
-  // Reference media state
+  // Reference media state (Veo)
   const [referenceImages, setReferenceImages] = useState<MediaFile[]>([]);
   const [startCard, setStartCard]             = useState<MediaFile | null>(null);
   const [endCard, setEndCard]                 = useState<MediaFile | null>(null);
@@ -683,7 +1001,8 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError]     = useState<string | null>(null);
 
-  const isVideo = mode === "video";
+  const isVideo   = mode === "video";
+  const isKling   = isVideo && provider === "kling";
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -692,21 +1011,41 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
     setLoading(true);
     setError(null);
 
-    // Attach reference media to video params
-    const finalVideoParams: VideoParams = {
-      ...videoParams,
-      reference_images_b64: referenceImages.length > 0 ? referenceImages.map((r) => r.b64) : null,
-      start_card_b64:       startCard?.b64 ?? null,
-      end_card_b64:         endCard?.b64 ?? null,
-    };
+    let req: GenerateRequest;
 
-    const req: GenerateRequest = {
-      brand_id:       effectiveBrandId,
-      mode,
-      user_prompt:    prompt.trim(),
-      enhance_prompt: enhancePrompt,
-      ...(isVideo ? { video_params: finalVideoParams } : { image_params: imageParams }),
-    };
+    if (isVideo && provider === "kling") {
+      req = {
+        brand_id:       effectiveBrandId,
+        mode:           "video",
+        model_provider: "kling",
+        user_prompt:    prompt.trim(),
+        enhance_prompt: enhancePrompt,
+        kling_params:   klingParams,
+      };
+    } else if (isVideo) {
+      const finalVideoParams: VideoParams = {
+        ...videoParams,
+        reference_images_b64: referenceImages.length > 0 ? referenceImages.map((r) => r.b64) : null,
+        start_card_b64:       startCard?.b64 ?? null,
+        end_card_b64:         endCard?.b64 ?? null,
+      };
+      req = {
+        brand_id:       effectiveBrandId,
+        mode:           "video",
+        model_provider: "veo",
+        user_prompt:    prompt.trim(),
+        enhance_prompt: enhancePrompt,
+        video_params:   finalVideoParams,
+      };
+    } else {
+      req = {
+        brand_id:       effectiveBrandId,
+        mode:           "image",
+        user_prompt:    prompt.trim(),
+        enhance_prompt: enhancePrompt,
+        image_params:   imageParams,
+      };
+    }
 
     try {
       const response = await generateAsset(req);
@@ -733,7 +1072,7 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
           </div>
           <div>
             <h2 className="text-sm font-bold text-slate-100">Create with AI</h2>
-            <p className="text-[10px] text-slate-500">Powered by Google Veo 2/3 · Imagen 3 · Gemini</p>
+            <p className="text-[10px] text-slate-500">Google Veo 3.1 · Kling 3.0 · Imagen 3 · Gemini</p>
           </div>
         </div>
       </div>
@@ -771,6 +1110,11 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
               Generate Image
             </button>
           </div>
+
+          {/* Provider selector — only relevant for video */}
+          {isVideo && (
+            <ProviderSelector value={provider} onChange={handleProviderChange} />
+          )}
 
           {/* Brand selector */}
           <div className="space-y-1.5">
@@ -835,6 +1179,15 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
           {/* ── VIDEO SETTINGS ─────────────────────────────────────────────────── */}
           {isVideo && (
             <div className="space-y-5">
+
+              {/* ── Kling settings (shown when Kling is selected) ──────────────── */}
+              {isKling && (
+                <KlingPanel params={klingParams} onChange={setKP} />
+              )}
+
+              {/* ── Veo settings (shown when Veo is selected) ─────────────────── */}
+              {!isKling && (
+              <>
 
               {/* Section: Model & Output */}
               <div className="space-y-4 rounded-xl border border-slate-700/40 bg-slate-800/30 p-4">
@@ -979,6 +1332,9 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
                   </div>
                 )}
               </div>
+
+              {/* end !isKling Veo-only block */}
+              </>)}
             </div>
           )}
 
@@ -1140,20 +1496,32 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
             type="submit"
             disabled={!canSubmit}
             className={`flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3.5 text-sm font-bold text-white shadow-lg transition-all disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-600 disabled:shadow-none ${
-              isVideo
-                ? "bg-gradient-to-r from-indigo-600 to-indigo-700 shadow-indigo-900/40 hover:from-indigo-500 hover:to-indigo-600"
-                : "bg-gradient-to-r from-purple-600 to-purple-700 shadow-purple-900/40 hover:from-purple-500 hover:to-purple-600"
+              !isVideo
+                ? "bg-gradient-to-r from-purple-600 to-purple-700 shadow-purple-900/40 hover:from-purple-500 hover:to-purple-600"
+                : isKling
+                  ? "bg-gradient-to-r from-emerald-600 to-emerald-700 shadow-emerald-900/40 hover:from-emerald-500 hover:to-emerald-600"
+                  : "bg-gradient-to-r from-indigo-600 to-indigo-700 shadow-indigo-900/40 hover:from-indigo-500 hover:to-indigo-600"
             }`}
           >
             {loading ? (
               <>
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-                {isVideo ? "Submitting to Veo…" : "Generating with Imagen…"}
+                {!isVideo
+                  ? "Generating with Imagen…"
+                  : isKling
+                    ? "Submitting to Kling…"
+                    : "Submitting to Veo…"
+                }
               </>
             ) : (
               <>
                 <Send className="h-4 w-4" />
-                {isVideo ? "Generate Video" : "Generate Image"}
+                {!isVideo
+                  ? "Generate Image"
+                  : isKling
+                    ? "Generate with Kling 3.0"
+                    : "Generate with Veo"
+                }
               </>
             )}
           </button>

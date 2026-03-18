@@ -21,6 +21,7 @@ from .database import (
 )
 from .gemini_client import enhance_prompt
 from .veo_client import generate_branded_video
+from .kling_client import generate_kling_video
 from .imagen_client import generate_images
 from .storage import upload_file, generate_signed_url
 from .worker import start_worker, stop_worker
@@ -167,10 +168,8 @@ async def generate_endpoint(payload: GenerateRequest):
     else:
         final_prompt = payload.user_prompt
 
-    # ── Video generation (async, Veo) ──────────────────────────────────────────
+    # ── Video generation (async) ───────────────────────────────────────────────
     if payload.mode == GenerationMode.VIDEO:
-        vp = payload.effective_video_params()
-
         video = await create_video(
             brand_id=payload.brand_id,
             user_prompt=payload.user_prompt,
@@ -179,12 +178,30 @@ async def generate_endpoint(payload: GenerateRequest):
         video_id = video["id"]
 
         try:
-            operation_name, _ = await generate_branded_video(
-                user_prompt=final_prompt,
-                brand_references=brand.get("reference_images", []),
-                brand_instructions=brand_instructions,
-                video_params=vp,
-            )
+            if payload.model_provider == "kling":
+                kp = payload.effective_kling_params()
+                operation_name, _ = await generate_kling_video(
+                    prompt=final_prompt,
+                    kling_model=kp.kling_model,
+                    conditioning_image_b64=kp.conditioning_image_b64,
+                    reference_image_b64=kp.reference_image_b64,
+                    cfg_scale=kp.cfg_scale,
+                    motion_intensity=kp.motion_intensity,
+                    duration=kp.duration,
+                    aspect_ratio=kp.aspect_ratio.value,
+                    negative_prompt=kp.negative_prompt,
+                )
+                provider_label = "Kling"
+            else:
+                vp = payload.effective_video_params()
+                operation_name, _ = await generate_branded_video(
+                    user_prompt=final_prompt,
+                    brand_references=brand.get("reference_images", []),
+                    brand_instructions=brand_instructions,
+                    video_params=vp,
+                )
+                provider_label = "Veo"
+
             await update_video_operation(video_id, operation_name)
 
             return VideoGenerateResponse(
@@ -192,13 +209,14 @@ async def generate_endpoint(payload: GenerateRequest):
                 video_ids=[video_id],
                 operation_id=operation_name,
                 status=VideoStatus.PROCESSING,
-                message="Video generation started. Poll /api/videos/{id} for status.",
+                message=f"Video generation started via {provider_label}. Poll /api/videos/{{id}} for status.",
                 mode=GenerationMode.VIDEO,
             )
 
         except Exception as e:
             await update_video_failed(video_id, str(e))
-            raise HTTPException(status_code=502, detail=f"Veo API error: {e}")
+            provider = payload.model_provider.capitalize()
+            raise HTTPException(status_code=502, detail=f"{provider} API error: {e}")
 
     # ── Image generation (sync, Imagen 3) ─────────────────────────────────────
     elif payload.mode == GenerationMode.IMAGE:

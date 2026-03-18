@@ -103,15 +103,32 @@ export interface ImageParams {
   negative_prompt?: string | null;
 }
 
+// ── Kling params ─────────────────────────────────────────────────────────────────
+
+export type ModelProvider = "veo" | "kling";
+
+export interface KlingParams {
+  kling_model:             string;       // "kling-3.0" | "kling-2.1" | …
+  duration:                5 | 10;
+  aspect_ratio:            AspectRatio;
+  cfg_scale:               number;       // 0.0 – 1.0  (subject/prompt adherence)
+  motion_intensity:        number;       // 0.0 – 1.0  (>0.5 enables pro mode)
+  negative_prompt?:        string | null;
+  conditioning_image_b64?: string | null; // triggers image-to-video
+  reference_image_b64?:    string | null; // UGC subject reference
+}
+
 // ── Unified generation request ──────────────────────────────────────────────────
 
 export interface GenerateRequest {
   brand_id:                string;
   mode:                    GenerationMode;
+  model_provider?:         ModelProvider;
   user_prompt:             string;
   enhance_prompt:          boolean;
   additional_instructions?: string;
   video_params?:           VideoParams;
+  kling_params?:           KlingParams;
   image_params?:           ImageParams;
 }
 
@@ -142,6 +159,17 @@ export const DEFAULT_VIDEO_PARAMS: VideoParams = {
   reference_images_b64: null,
   start_card_b64:  null,
   end_card_b64:    null,
+};
+
+export const DEFAULT_KLING_PARAMS: KlingParams = {
+  kling_model:          "kling-3.0",
+  duration:             5,
+  aspect_ratio:         "16:9",
+  cfg_scale:            0.5,
+  motion_intensity:     0.5,
+  negative_prompt:      null,
+  conditioning_image_b64: null,
+  reference_image_b64:  null,
 };
 
 export const DEFAULT_IMAGE_PARAMS: ImageParams = {
