@@ -151,6 +151,7 @@ async def generate_runway_video(
     elif runway_params.reference_images_b64 and runway_params.reference_images_b64[0]:
         prompt_image = f"data:image/jpeg;base64,{runway_params.reference_images_b64[0]}"
 
+    logger.info(f"=== RUNWAY ENDPOINT: {settings.RUNWAY_API_BASE_URL} ===")
     logger.info(
         f"Runway {model} | ratio={runway_ratio} | dur={duration}s"
         f" | mode={'image-to-video' if prompt_image else 'text-to-video'}"
@@ -217,6 +218,7 @@ async def create_runway_character(
     description: str,
     training_data_url: str,
 ) -> str:
+    logger.info(f"=== RUNWAY ENDPOINT: {settings.RUNWAY_API_BASE_URL} ===")
     """
     Create a Runway Character for custom avatar training.
     Returns character_id.

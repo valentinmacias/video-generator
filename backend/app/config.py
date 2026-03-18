@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings
 from typing import Optional
 
@@ -10,7 +11,13 @@ class Settings(BaseSettings):
 
     # Runway ML
     RUNWAYML_API_SECRET: Optional[str] = None
-    RUNWAY_API_BASE_URL: str = "https://api.runwayml.com"  # never use the dev/sandbox endpoint
+    RUNWAY_API_BASE_URL: str = Field(
+        default="https://api.dev.runwayml.com",
+        description=(
+            "Use https://api.dev.runwayml.com for sandbox/dev keys (most users). "
+            "Use https://api.runwayml.com only for production keys that consume credits."
+        ),
+    )
 
     # Kling AI (legacy fallback)
     KLING_ACCESS_KEY: Optional[str] = None
