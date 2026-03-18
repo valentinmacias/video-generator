@@ -121,25 +121,44 @@ async def poll_operation(operation_name: str) -> Dict[str, Any]:
             if hasattr(operation, "error") and operation.error:
                 result["error"] = str(operation.error)
             else:
-                # SDK may expose result as .result or .response
-                raw_result = getattr(operation, "response", None) or getattr(operation, "result", None)
+                # SDK exposes the Python result object in .result, raw dict in .response
+                # Always prefer .result since it has typed attributes like generated_videos
+                raw_result = getattr(operation, "result", None) or getattr(operation, "response", None)
                 if raw_result:
                     generated = getattr(raw_result, "generated_videos", None)
                     logger.info(f"generated_videos: {generated}")
-                if raw_result and generated:
+
+                # Check for RAI filtering even when generated_videos is None
+                rai_filtered = getattr(raw_result, "rai_media_filtered_count", 0) or 0
+                rai_reasons = getattr(raw_result, "rai_media_filtered_reasons", None)
+                if rai_filtered and not generated:
+                    reason_str = ""
+                    if rai_reasons:
+                        reason_str = f": {rai_reasons[0]}" if rai_reasons else ""
+                    result["error"] = (
+                        f"Video blocked by Google's safety filters (RAI){reason_str}. "
+                        "Try rephrasing your prompt to avoid specific people, violence, or other restricted content."
+                    )
+                elif raw_result and generated:
                     video = generated[0]
-                    # Try GCS URI first, fall back to encoded bytes
+                    # Try direct gcs_uri first
                     if hasattr(video, "gcs_uri") and video.gcs_uri:
                         result["video_uri"] = video.gcs_uri
                     elif hasattr(video, "video") and video.video:
-                        # video.video may be base64 encoded bytes
-                        raw = video.video
-                        if isinstance(raw, str):
-                            result["video_bytes"] = base64.b64decode(raw)
-                        elif isinstance(raw, bytes):
-                            result["video_bytes"] = raw
+                        inner = video.video
+                        # video.video is a Video object with a uri, or raw bytes/base64
+                        if hasattr(inner, "uri") and inner.uri:
+                            result["video_uri"] = inner.uri
+                        elif isinstance(inner, str):
+                            result["video_bytes"] = base64.b64decode(inner)
+                        elif isinstance(inner, bytes):
+                            result["video_bytes"] = inner
+                        else:
+                            result["error"] = "No video output found in completed operation"
                     else:
                         result["error"] = "No video output found in completed operation"
+                else:
+                    result["error"] = "Operation completed but no video data found"
 
         return result
 

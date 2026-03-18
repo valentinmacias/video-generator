@@ -3,6 +3,7 @@ from google.oauth2 import service_account
 import os
 import uuid
 import logging
+import httpx
 from typing import Optional, Tuple
 from .config import settings
 
@@ -49,15 +50,17 @@ def upload_file(
 
 def upload_video_from_uri(source_uri: str, video_id: str) -> Tuple[str, str]:
     """
-    Copy a video already in GCS (from Veo output) to our bucket.
+    Copy a video to our GCS bucket.
+    Handles both gs:// URIs (GCS copy) and https:// URIs (download then upload).
     Returns (gcs_uri, signed_url).
     """
+    if source_uri.startswith("https://"):
+        return _upload_video_from_https(source_uri, video_id)
+
     client = get_gcs_client()
     bucket = client.bucket(settings.GCS_BUCKET_NAME)
     blob_name = f"videos/{video_id}.mp4"
-    destination_blob = bucket.blob(blob_name)
 
-    # If the source is already in our bucket, just rename/copy
     source_bucket_name, source_blob_name = _parse_gcs_uri(source_uri)
     source_bucket = client.bucket(source_bucket_name)
     source_blob = source_bucket.blob(source_blob_name)
@@ -66,6 +69,25 @@ def upload_video_from_uri(source_uri: str, video_id: str) -> Tuple[str, str]:
     gcs_uri = f"gs://{settings.GCS_BUCKET_NAME}/{blob_name}"
     signed_url = generate_signed_url(blob_name)
     return gcs_uri, signed_url
+
+
+def _upload_video_from_https(url: str, video_id: str) -> Tuple[str, str]:
+    """Download a video from an https URL (e.g. Google Files API) and upload to GCS."""
+    # Append API key so the request is authenticated
+    download_url = url
+    if "?" not in url:
+        download_url = f"{url}?key={settings.GOOGLE_API_KEY}"
+    else:
+        download_url = f"{url}&key={settings.GOOGLE_API_KEY}"
+
+    logger.info(f"Downloading video from Google Files API for video {video_id}")
+    with httpx.Client(timeout=120) as client:
+        resp = client.get(download_url)
+        resp.raise_for_status()
+        video_bytes = resp.content
+
+    logger.info(f"Downloaded {len(video_bytes)} bytes, uploading to GCS")
+    return save_video_bytes(video_bytes, video_id)
 
 
 def save_video_bytes(video_bytes: bytes, video_id: str) -> Tuple[str, str]:
