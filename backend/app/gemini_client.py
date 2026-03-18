@@ -1,7 +1,7 @@
 """
 Prompt Engineering Module
-Uses Gemini 1.5 Flash to expand a simple user prompt into a
-cinematic, technically-optimised prompt for Veo 3.1.
+Uses Gemini to expand a simple user prompt into a cinematic,
+technically-optimised prompt for Veo 3.1.
 """
 import logging
 from typing import List, Optional
@@ -12,6 +12,9 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 _gemini_client: Optional[genai.Client] = None
+# Circuit breaker: set to True after a permanent error (404 / model not found)
+# so we stop wasting API quota on every subsequent request.
+_gemini_disabled = False
 
 
 def get_gemini_client() -> genai.Client:
@@ -19,6 +22,20 @@ def get_gemini_client() -> genai.Client:
     if _gemini_client is None:
         _gemini_client = genai.Client(api_key=settings.GOOGLE_API_KEY)
     return _gemini_client
+
+
+def _is_permanent_error(e: Exception) -> bool:
+    """Return True for errors that will never succeed on retry (404, invalid model)."""
+    msg = str(e).lower()
+    return "404" in msg or "not found" in msg or "does not exist" in msg or "invalid model" in msg
+
+
+def _fallback_prompt(user_prompt: str) -> str:
+    return (
+        f"{user_prompt}. "
+        "Cinematic 16:9 composition, professional lighting, "
+        "smooth camera movement, high production value, photorealistic."
+    )
 
 
 SYSTEM_PROMPT = """You are an expert cinematographer and prompt engineer specialising in AI video generation
@@ -44,9 +61,17 @@ async def enhance_prompt(
     reference_images: Optional[List[str]] = None,
 ) -> str:
     """
-    Call Gemini 1.5 Flash to expand a user prompt into a cinematic Veo prompt.
-    Returns the enhanced prompt string.
+    Call Gemini to expand a user prompt into a cinematic Veo prompt.
+    Falls back to a basic enrichment if Gemini is unavailable.
+    Circuit breaker: after the first permanent error (e.g. 404 model not found),
+    all subsequent calls skip Gemini immediately to avoid wasting quota.
     """
+    global _gemini_disabled
+
+    if _gemini_disabled:
+        logger.warning("Gemini circuit open — skipping API call, using fallback.")
+        return _fallback_prompt(user_prompt)
+
     client = get_gemini_client()
 
     brand_context = f"\n\nBrand Visual Identity:\n{brand_instructions}" if brand_instructions else ""
@@ -76,10 +101,13 @@ async def enhance_prompt(
         return enhanced
 
     except Exception as e:
-        logger.error(f"Gemini prompt enhancement failed (model={settings.GEMINI_MODEL}): {type(e).__name__}: {e}")
-        # Graceful fallback: return original prompt with basic enrichment
-        return (
-            f"{user_prompt}. "
-            "Cinematic 16:9 composition, professional lighting, "
-            "smooth camera movement, high production value, photorealistic."
-        )
+        if _is_permanent_error(e):
+            _gemini_disabled = True
+            logger.error(
+                f"Gemini model '{settings.GEMINI_MODEL}' not found (permanent error). "
+                f"Circuit breaker opened — all future calls will use fallback. "
+                f"Fix: update GEMINI_MODEL in .env (e.g. gemini-1.5-flash). Error: {e}"
+            )
+        else:
+            logger.error(f"Gemini prompt enhancement failed: {type(e).__name__}: {e}")
+        return _fallback_prompt(user_prompt)
