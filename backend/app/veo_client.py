@@ -23,6 +23,19 @@ logger = logging.getLogger(__name__)
 _veo_client: Optional[genai.Client] = None
 
 
+def _detect_mime_type(image_bytes: bytes) -> str:
+    """Detect image MIME type from magic bytes."""
+    if image_bytes[:3] == b'\xff\xd8\xff':
+        return "image/jpeg"
+    if image_bytes[:8] == b'\x89PNG\r\n\x1a\n':
+        return "image/png"
+    if image_bytes[:6] in (b'GIF87a', b'GIF89a'):
+        return "image/gif"
+    if image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        return "image/webp"
+    return "image/jpeg"  # fallback
+
+
 def get_veo_client() -> genai.Client:
     global _veo_client
     if _veo_client is None:
@@ -160,8 +173,9 @@ async def generate_branded_video(
     if params.start_card_b64:
         try:
             image_bytes = base64.b64decode(params.start_card_b64)
-            image_param = genai_types.Image(image_bytes=image_bytes)
-            logger.info("Using start_card_b64 as conditioning image")
+            mime_type = _detect_mime_type(image_bytes)
+            image_param = genai_types.Image(image_bytes=image_bytes, mime_type=mime_type)
+            logger.info(f"Using start_card_b64 as conditioning image (mime={mime_type})")
         except Exception as e:
             logger.warning(f"Failed to decode start_card_b64, falling back: {e}")
 
@@ -169,7 +183,8 @@ async def generate_branded_video(
     if image_param is None and params.reference_images_b64:
         try:
             image_bytes = base64.b64decode(params.reference_images_b64[0])
-            image_param = genai_types.Image(image_bytes=image_bytes)
+            mime_type = _detect_mime_type(image_bytes)
+            image_param = genai_types.Image(image_bytes=image_bytes, mime_type=mime_type)
             logger.info(
                 f"Using reference_images_b64[0] as conditioning image "
                 f"({len(params.reference_images_b64)} ref image(s) provided)"
