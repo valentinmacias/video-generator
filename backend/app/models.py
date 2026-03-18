@@ -263,6 +263,7 @@ class VideoGenerateResponse(BaseModel):
     status:       VideoStatus
     message:      str
     mode:         GenerationMode = GenerationMode.VIDEO
+    provider:     Optional[str]  = None  # e.g. "Runway gen4_turbo" | "Veo" | "Kling"
 
 
 # ── Legacy request (kept for backward compatibility) ───────────────────────────

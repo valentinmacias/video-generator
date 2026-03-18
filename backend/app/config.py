@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     # Google AI
     GOOGLE_API_KEY: str
     VEO_MODEL: str = "veo-2.0-generate-001"
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL: str = "gemini-1.5-flash"
 
     # Runway ML
     RUNWAYML_API_SECRET: Optional[str] = None
