@@ -76,7 +76,7 @@ async def enhance_prompt(
         return enhanced
 
     except Exception as e:
-        logger.error(f"Gemini prompt enhancement failed: {e}")
+        logger.error(f"Gemini prompt enhancement failed (model={settings.GEMINI_MODEL}): {type(e).__name__}: {e}")
         # Graceful fallback: return original prompt with basic enrichment
         return (
             f"{user_prompt}. "
