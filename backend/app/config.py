@@ -5,8 +5,8 @@ from typing import Optional
 class Settings(BaseSettings):
     # Google AI
     GOOGLE_API_KEY: str
-    VEO_MODEL: str = "veo-3.1-generate-preview"
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    VEO_MODEL: str = "veo-2.0-generate-001"
+    GEMINI_MODEL: str = "gemini-2.0-flash-lite"
 
     # Supabase
     SUPABASE_URL: str
