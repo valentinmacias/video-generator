@@ -188,16 +188,14 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
     ]);
 
     const req: GenerateRequest = {
-      prompt,
-      brand_id:           brand?.id,
-      mode:               "image",
-      use_gemini_enhance: gemini,
+      user_prompt:    prompt,
+      brand_id:       brand?.id ?? null,
+      mode:           "image",
+      enhance_prompt: gemini,
       image_params: {
         ...DEFAULT_IMAGE_PARAMS,
         aspect_ratio: aspectRatio as ImageParams["aspect_ratio"],
       },
-      reference_images_b64: uploadedRef ? [uploadedRef.b64] : undefined,
-      model_reference_image_b64: modelRef?.b64,
     };
 
     // Fire 3 parallel image generations
@@ -246,30 +244,33 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
     ]);
 
     const baseReq: GenerateRequest = {
-      prompt,
-      brand_id:           brand?.id,
-      mode:               "video",
-      provider,
-      use_gemini_enhance: gemini,
-      reference_images_b64: refB64 ? [refB64] : undefined,
-      model_reference_image_b64: modelRef?.b64,
-      start_card_b64:            startCard?.b64,
+      user_prompt:    prompt,
+      brand_id:       brand?.id ?? null,
+      mode:           "video",
+      model_provider: provider,
+      enhance_prompt: gemini,
       ...(provider === "veo"
         ? {
             video_params: {
               ...DEFAULT_VIDEO_PARAMS,
-              model:         veoModel,
-              aspect_ratio:  aspectRatio as VideoParams["aspect_ratio"],
-              duration_seconds: duration,
-              camera_movement: cameraMove as VideoParams["camera_movement"],
+              veo_model:            veoModel,
+              aspect_ratio:         aspectRatio as VideoParams["aspect_ratio"],
+              duration:             duration as VideoParams["duration"],
+              camera_movement:      cameraMove as VideoParams["camera_movement"],
+              reference_images_b64: (refB64 || modelRef?.b64)
+                ? [...(refB64 ? [refB64] : []), ...(modelRef?.b64 ? [modelRef.b64] : [])]
+                : null,
+              start_card_b64: startCard?.b64 ?? null,
             },
           }
         : {
             kling_params: {
               ...DEFAULT_KLING_PARAMS,
-              model:        klingModel,
-              aspect_ratio: aspectRatio as KlingParams["aspect_ratio"],
-              duration:     duration,
+              kling_model:            klingModel,
+              aspect_ratio:           aspectRatio as KlingParams["aspect_ratio"],
+              duration:               duration as KlingParams["duration"],
+              conditioning_image_b64: refB64 ?? null,
+              reference_image_b64:    modelRef?.b64 ?? null,
             },
           }),
     };

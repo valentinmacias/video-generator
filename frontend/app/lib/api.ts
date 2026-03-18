@@ -121,7 +121,7 @@ export interface KlingParams {
 // ── Unified generation request ──────────────────────────────────────────────────
 
 export interface GenerateRequest {
-  brand_id:                string;
+  brand_id:                string | null;
   mode:                    GenerationMode;
   model_provider?:         ModelProvider;
   user_prompt:             string;
@@ -141,6 +141,9 @@ export interface GenerateResponse {
   status:       VideoStatus;
   message:      string;
   mode:         GenerationMode;
+  // Image generation results (populated when mode === "image")
+  image_url?:   string | null;
+  image_urls?:  string[];
 }
 
 // ── Default parameter values ────────────────────────────────────────────────────

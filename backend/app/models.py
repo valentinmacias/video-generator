@@ -162,7 +162,7 @@ class GenerateRequest(BaseModel):
     `video_params` or `image_params` (the other is ignored).
     Set `model_provider` to route between Veo and Kling for video generation.
     """
-    brand_id:                str
+    brand_id:                Optional[str] = None
     mode:                    GenerationMode = GenerationMode.VIDEO
     model_provider:          Literal["veo", "kling"] = "veo"
     user_prompt:             str            = Field(..., min_length=10, max_length=1000)
