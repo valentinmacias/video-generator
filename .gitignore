@@ -22,6 +22,7 @@ npm-debug.log*
 *.json
 !package.json
 !tsconfig.json
+!vercel.json
 
 # OS
 .DS_Store
