@@ -4,7 +4,7 @@ import { Sidebar } from "./components/Sidebar";
 
 export const metadata: Metadata = {
   title: "Video Brand Generator",
-  description: "Generate brand-consistent videos powered by Google Veo 3.1",
+  description: "Generate brand-consistent videos powered by Runway Gen-4 Turbo",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -103,6 +103,23 @@ export function VideoCard({ video }: { video: Video }) {
 
       {/* Card body */}
       <div className="p-4 space-y-2.5">
+        {/* Model badge — prominent, always first */}
+        <div>
+          {video.model_provider === "runway" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-green-500/40 bg-green-500/15 px-3 py-1 text-[11px] font-bold text-green-400">
+              ⚡ Runway Gen-4 Turbo
+            </span>
+          ) : video.model_provider === "veo" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-blue-500/40 bg-blue-500/15 px-3 py-1 text-[11px] font-bold text-blue-400">
+              ☁ Google Veo
+            </span>
+          ) : video.model_provider === "kling" ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-tt-border bg-tt-surface px-3 py-1 text-[11px] font-bold text-tt-muted">
+              Kling AI
+            </span>
+          ) : null}
+        </div>
+
         {/* Status + time row */}
         <div className="flex items-center justify-between gap-2">
           <span className={clsx("inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold", config.classes)}>

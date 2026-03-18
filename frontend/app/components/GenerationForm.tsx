@@ -591,22 +591,24 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
                       </select>
                     </div>
 
-                    {/* Model selector */}
+                    {/* Model selector — Runway only (Veo hidden) */}
                     <div className="space-y-2">
-                      <label className="text-xs font-semibold uppercase tracking-wider text-tt-muted">AI Model</label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {VIDEO_MODELS.map((m) => {
-                          const isActive = provider === m.provider &&
-                            (m.provider === "runway" ? runwayModel === m.model : m.provider === "veo" ? veoModel === m.model : true);
+                      <div className="flex items-center gap-2">
+                        <label className="text-xs font-semibold uppercase tracking-wider text-tt-muted">AI Model</label>
+                        <span className="rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[10px] font-bold text-green-400">
+                          ⚡ Powered by Runway
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {VIDEO_MODELS.filter((m) => m.provider === "runway").map((m) => {
+                          const isActive = runwayModel === m.model;
                           return (
                             <button
                               key={`${m.provider}-${m.model}`}
                               onClick={() => {
-                                setProvider(m.provider);
-                                if (m.provider === "runway") setRunwayModel(m.model as RunwayModel);
-                                if (m.provider === "veo")    setVeoModel(m.model as VeoModel);
-                                // Adjust duration for Runway (no 8s)
-                                if (m.provider === "runway" && duration === 8) setDuration(5);
+                                setProvider("runway");
+                                setRunwayModel(m.model as RunwayModel);
+                                if (duration === 8) setDuration(5);
                               }}
                               className={clsx(
                                 "rounded-xl border p-3 text-left transition-all text-xs",

@@ -59,6 +59,17 @@ export default function LibraryPage() {
     return () => clearInterval(t);
   }, [videos, brandId]);
 
+  // Refresh when the user returns to this tab (e.g. after generating on home page)
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        listVideos(brandId || undefined, 50).then(setVideos).catch(console.error);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [brandId]);
+
   const isImage  = (v: Video) => v.mode === "image";
   const filtered = videos
     .filter((v) => (tab === "images" ? isImage(v) : !isImage(v)))
@@ -257,12 +268,20 @@ function LibraryCard({ video, index, playing, onPlay }: {
           {video.user_prompt || video.enhanced_prompt || "No prompt"}
         </p>
 
-        {/* Provider badge */}
-        {video.model_provider && (
-          <span className="inline-block rounded-full bg-tt-border px-2 py-0.5 text-[10px] font-semibold text-tt-muted capitalize">
-            {video.model_provider === "veo" ? "Google Veo" : "Kling AI"}
+        {/* Model badge */}
+        {video.model_provider === "runway" ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-green-500/40 bg-green-500/15 px-2.5 py-0.5 text-[10px] font-bold text-green-400">
+            ⚡ Runway Gen-4 Turbo
           </span>
-        )}
+        ) : video.model_provider === "veo" ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/40 bg-blue-500/15 px-2.5 py-0.5 text-[10px] font-bold text-blue-400">
+            ☁ Google Veo
+          </span>
+        ) : video.model_provider === "kling" ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-tt-border bg-tt-surface px-2.5 py-0.5 text-[10px] font-semibold text-tt-muted">
+            Kling AI
+          </span>
+        ) : null}
 
         {/* Actions */}
         {video.status === "COMPLETED" && (video.video_url || video.image_url) && (
