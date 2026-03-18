@@ -197,7 +197,7 @@ class GenerateRequest(BaseModel):
     """
     brand_id:                Optional[str] = None
     mode:                    GenerationMode = GenerationMode.VIDEO
-    model_provider:          Literal["runway", "veo", "kling"] = "runway"
+    model_provider:          Literal["runway", "veo", "kling"] = "runway"  # Runway is the default
     user_prompt:             str            = Field(..., min_length=10, max_length=1000)
     enhance_prompt:          bool           = True   # False = raw mode, skip Gemini
     additional_instructions: Optional[str]  = Field(None, max_length=500)

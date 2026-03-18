@@ -173,6 +173,13 @@ async def generate_endpoint(payload: GenerateRequest):
 
     # ── Video generation (async) ───────────────────────────────────────────────
     if payload.mode == GenerationMode.VIDEO:
+        # Fail fast if Runway is requested but not configured
+        if payload.model_provider == "runway" and not settings.RUNWAYML_API_SECRET:
+            raise HTTPException(
+                status_code=503,
+                detail="Runway is selected but RUNWAYML_API_SECRET is not configured.",
+            )
+
         video = await create_video(
             brand_id=payload.brand_id,
             user_prompt=payload.user_prompt,
@@ -183,6 +190,9 @@ async def generate_endpoint(payload: GenerateRequest):
         try:
             if payload.model_provider == "runway":
                 rp = payload.effective_runway_params()
+                logger.info(
+                    f"[video={video_id}] Using Runway Gen-4 Turbo for this generation"
+                )
                 operation_name, _ = await generate_runway_video(
                     prompt=final_prompt,
                     runway_params=rp,
@@ -190,8 +200,10 @@ async def generate_endpoint(payload: GenerateRequest):
                     brand_instructions=brand_instructions,
                 )
                 provider_label = f"Runway {rp.runway_model.value}"
+
             elif payload.model_provider == "kling":
                 kp = payload.effective_kling_params()
+                logger.info(f"[video={video_id}] Using Kling for this generation")
                 operation_name, _ = await generate_kling_video(
                     prompt=final_prompt,
                     kling_model=kp.kling_model,
@@ -204,8 +216,13 @@ async def generate_endpoint(payload: GenerateRequest):
                     negative_prompt=kp.negative_prompt,
                 )
                 provider_label = "Kling"
-            else:
+
+            else:  # "veo" or any unrecognised value
                 vp = payload.effective_video_params()
+                logger.info(
+                    f"[video={video_id}] Using Google Veo as fallback"
+                    f" (model_provider={payload.model_provider!r})"
+                )
                 operation_name, _ = await generate_branded_video(
                     user_prompt=final_prompt,
                     brand_references=brand.get("reference_images", []),
@@ -215,6 +232,10 @@ async def generate_endpoint(payload: GenerateRequest):
                 provider_label = "Veo"
 
             await update_video_operation(video_id, operation_name)
+            logger.info(
+                f"[video={video_id}] Generation submitted via {provider_label}"
+                f" | operation={operation_name}"
+            )
 
             return VideoGenerateResponse(
                 video_id=video_id,
@@ -228,6 +249,7 @@ async def generate_endpoint(payload: GenerateRequest):
         except Exception as e:
             await update_video_failed(video_id, str(e))
             provider = payload.model_provider.capitalize()
+            logger.error(f"[video={video_id}] {provider} API error: {e}", exc_info=True)
             raise HTTPException(status_code=502, detail=f"{provider} API error: {e}")
 
     # ── Image generation (sync, Imagen 3) ─────────────────────────────────────
