@@ -64,6 +64,7 @@ interface MediaFile {
 
 // ── Model definitions ─────────────────────────────────────────────────────────
 
+// Runway Gen-4 Turbo is the only supported model — Veo removed
 const VIDEO_MODELS: {
   provider: ModelProvider;
   model:    string;
@@ -75,14 +76,8 @@ const VIDEO_MODELS: {
   {
     provider: "runway", model: "gen4_turbo",
     label: "Runway Gen-4 Turbo", sublabel: "gen4_turbo",
-    badge: "Recommended",
+    badge: "Active",
     color: "from-tt-accent/20 to-tt-blue/10 border-tt-accent/40 text-tt-accent",
-  },
-  {
-    provider: "runway", model: "gen4_5",
-    label: "Runway Gen-4.5", sublabel: "gen4_5",
-    badge: "Custom Training",
-    color: "from-purple-500/20 to-purple-600/10 border-purple-500/40 text-purple-300",
   },
 ];
 
@@ -549,44 +544,19 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
                       </select>
                     </div>
 
-                    {/* Model selector — Runway only (Veo hidden) */}
+                    {/* Model — Runway Gen-4 Turbo locked (only option) */}
                     <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <label className="text-xs font-semibold uppercase tracking-wider text-tt-muted">AI Model</label>
-                        <span className="rounded-full border border-green-500/30 bg-green-500/10 px-2 py-0.5 text-[10px] font-bold text-green-400">
-                          ⚡ Powered by Runway
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-2 gap-2">
-                        {VIDEO_MODELS.filter((m) => m.provider === "runway").map((m) => {
-                          const isActive = runwayModel === m.model;
-                          return (
-                            <button
-                              key={`${m.provider}-${m.model}`}
-                              onClick={() => {
-                                setProvider("runway");
-                                setRunwayModel(m.model as RunwayModel);
-                                if (duration === 8) setDuration(5);
-                              }}
-                              className={clsx(
-                                "rounded-xl border p-3 text-left transition-all text-xs",
-                                isActive
-                                  ? `bg-gradient-to-br ${m.color}`
-                                  : "border-tt-border bg-tt-card text-tt-muted hover:border-tt-dim hover:text-tt-text"
-                              )}
-                            >
-                              <div className="flex items-start justify-between gap-1 mb-1">
-                                <p className={clsx("font-bold leading-tight text-[11px]", isActive ? "" : "text-tt-text")}>{m.label}</p>
-                                <span className={clsx("flex-shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-bold border",
-                                  isActive ? "border-current bg-current/10" : "border-tt-border bg-tt-surface text-tt-muted"
-                                )}>
-                                  {m.badge}
-                                </span>
-                              </div>
-                              <p className="text-[10px] opacity-60 font-mono">{m.sublabel}</p>
-                            </button>
-                          );
-                        })}
+                      <label className="text-xs font-semibold uppercase tracking-wider text-tt-muted">AI Model</label>
+                      <div className="rounded-xl border border-green-400/40 bg-gradient-to-br from-green-500/10 to-emerald-500/5 p-4 shadow-[0_0_20px_rgba(74,222,128,0.15)]">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-sm font-black text-green-400 tracking-wide">⚡ Runway Gen-4 Turbo</p>
+                            <p className="text-[11px] text-green-400/60 font-mono mt-0.5">gen4_turbo · Real credits deducted</p>
+                          </div>
+                          <span className="flex-shrink-0 rounded-full border border-green-400/50 bg-green-400/15 px-3 py-1 text-[10px] font-black text-green-400 uppercase tracking-wider">
+                            Active
+                          </span>
+                        </div>
                       </div>
                     </div>
 

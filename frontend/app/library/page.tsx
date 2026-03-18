@@ -211,24 +211,6 @@ function LibraryCard({ video, index, playing, onPlay }: {
     >
       {/* Media area */}
       <div className="relative aspect-video overflow-hidden bg-tt-surface">
-        {/* Provider badge — TikTok-style overlay */}
-        {video.model_provider && (
-          <div className="absolute top-2 left-2 z-10">
-            {video.model_provider === "runway" ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-black/80 backdrop-blur-sm border border-green-400/60 px-3 py-1.5 text-xs font-black text-green-400 shadow-[0_0_14px_rgba(74,222,128,0.45)]">
-                ⚡ Runway Gen-4 Turbo
-              </span>
-            ) : video.model_provider === "veo" ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-black/80 backdrop-blur-sm border border-blue-400/60 px-3 py-1.5 text-xs font-black text-blue-400 shadow-[0_0_10px_rgba(96,165,250,0.35)]">
-                ☁ Google Veo
-              </span>
-            ) : video.model_provider === "kling" ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-black/80 backdrop-blur-sm border border-white/20 px-3 py-1.5 text-xs font-bold text-tt-muted">
-                Kling AI
-              </span>
-            ) : null}
-          </div>
-        )}
         {isImg && video.image_url ? (
           <div className="relative h-full w-full">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -270,8 +252,16 @@ function LibraryCard({ video, index, playing, onPlay }: {
         )}
       </div>
 
+      {/* BIG Runway badge — TikTok-style */}
+      <div className="px-3 pt-3 pb-0.5">
+        <div className="rounded-xl border border-green-400/40 bg-gradient-to-r from-green-500/15 to-emerald-500/10 px-3 py-2.5 shadow-[0_0_20px_rgba(74,222,128,0.2)]">
+          <p className="text-xs font-black text-green-400 tracking-wide">⚡ Generated with Runway Gen-4 Turbo</p>
+          <p className="text-[10px] text-green-400/65 font-semibold mt-0.5">Real credits deducted</p>
+        </div>
+      </div>
+
       {/* Card body */}
-      <div className="p-3 space-y-2">
+      <div className="px-3 pb-3 pt-2 space-y-2">
         {/* Status + time */}
         <div className="flex items-center justify-between gap-2">
           <span className={clsx("inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold", cfg.color)}>
