@@ -23,7 +23,10 @@ export interface Video {
   user_prompt:     string;
   enhanced_prompt: string | null;
   status:          VideoStatus;
+  mode?:           GenerationMode;
+  model_provider?: ModelProvider;
   video_url:       string | null;
+  image_url?:      string | null;
   thumbnail_url:   string | null;
   error_message:   string | null;
   created_at:      string;

@@ -317,7 +317,7 @@ export function GenerationForm({ brands, onGenerated }: GenerationFormProps) {
           return {
             ...v,
             status:   vid.status,
-            url:      vid.video_url,
+            url:      vid.video_url ?? undefined,
             progress: vid.status === "COMPLETED" ? 100 : Math.min(95, v.progress + 8),
           };
         }
