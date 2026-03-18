@@ -14,7 +14,9 @@ from typing import Optional, List, Dict, Any, Tuple
 from google import genai
 from google.genai import types as genai_types
 from .config import settings
-from .models import VideoParams, CameraMovement, MotionStrength, LightingStyle, VisualStyle, Quality
+from .models import (
+    VideoParams, CameraMovement, MotionStrength, LightingStyle, VisualStyle, Quality,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,6 @@ def get_veo_client() -> genai.Client:
 
 # ── Style hint builder ─────────────────────────────────────────────────────────
 
-# Human-readable descriptors that Veo understands as natural language prompt text
 _CAMERA_MOVEMENT_PHRASES: Dict[str, str] = {
     CameraMovement.STATIC:        "static camera, locked-off shot",
     CameraMovement.SLOW_PAN:      "slow panning camera movement",
@@ -43,25 +44,28 @@ _CAMERA_MOVEMENT_PHRASES: Dict[str, str] = {
 }
 
 _MOTION_STRENGTH_PHRASES: Dict[str, str] = {
-    MotionStrength.SUBTLE:  "subtle, gentle motion",
-    MotionStrength.MEDIUM:  "natural, fluid motion",
-    MotionStrength.DYNAMIC: "dynamic, energetic motion",
-    MotionStrength.EPIC:    "epic, powerful sweeping motion with high kinetic energy",
+    MotionStrength.SUBTLE:    "subtle, gentle motion",
+    MotionStrength.MEDIUM:    "natural, fluid motion",
+    MotionStrength.DYNAMIC:   "dynamic, energetic motion",
+    MotionStrength.CINEMATIC: "dramatic cinematic motion, purposeful and deliberate movement",
+    MotionStrength.EPIC:      "epic, powerful sweeping motion with high kinetic energy",
 }
 
 _LIGHTING_PHRASES: Dict[str, str] = {
-    LightingStyle.GOLDEN_HOUR:  "warm golden-hour lighting, long shadows, orange-amber tones",
-    LightingStyle.DRAMATIC:     "dramatic high-contrast lighting with deep shadows",
-    LightingStyle.SOFT_NATURAL: "soft, diffused natural daylight",
-    LightingStyle.STUDIO:       "clean professional studio lighting, neutral, controlled",
-    LightingStyle.NEON:         "vibrant neon-lit atmosphere, colourful urban glow",
+    LightingStyle.GOLDEN_HOUR:   "warm golden-hour lighting, long shadows, orange-amber tones",
+    LightingStyle.DRAMATIC:      "dramatic high-contrast cinematic lighting with deep shadows",
+    LightingStyle.SOFT_NATURAL:  "soft, diffused natural daylight",
+    LightingStyle.STUDIO:        "clean professional studio lighting, neutral, controlled",
+    LightingStyle.NEON:          "vibrant neon-cyberpunk atmosphere, colourful urban glow",
+    LightingStyle.MOODY_LOW_KEY: "moody low-key lighting, deep shadows, minimal fill light, mysterious dark atmosphere",
 }
 
 _VISUAL_STYLE_PHRASES: Dict[str, str] = {
     VisualStyle.PHOTOREALISTIC: "photorealistic, ultra-detailed, true-to-life",
-    VisualStyle.CINEMATIC:      "cinematic film quality, anamorphic lens look, movie-grade grade",
-    VisualStyle.ARTISTIC:       "artistic, painterly aesthetic, expressive composition",
-    VisualStyle.COMMERCIAL:     "polished commercial production quality, brand-safe",
+    VisualStyle.CINEMATIC:      "Hollywood cinematic quality, anamorphic lens look, movie-grade color grading",
+    VisualStyle.COMMERCIAL:     "polished commercial ad production quality, brand-safe, aspirational",
+    VisualStyle.ARTISTIC:       "artistic film aesthetic, painterly, expressive composition, auteur style",
+    VisualStyle.DOCUMENTARY:    "documentary-style, authentic, natural, observational cinematography, reportage feel",
     VisualStyle.ANIME:          "anime-style animation, vibrant colours, fluid movement",
 }
 
@@ -74,10 +78,10 @@ _QUALITY_PHRASES: Dict[str, str] = {
 
 def build_style_suffix(params: VideoParams) -> str:
     """
-    Convert VideoParams into a natural-language suffix that is appended to
-    the cinematic prompt before sending to Veo. All style choices become
-    prompt-level hints since the Veo API itself only exposes aspect_ratio,
-    duration, and number_of_videos as config knobs.
+    Convert VideoParams into a natural-language suffix appended to the cinematic
+    prompt before sending to Veo. All style choices become prompt-level hints
+    since the Veo API itself only exposes aspect_ratio, duration, and
+    number_of_videos as config knobs.
     """
     parts = [
         _CAMERA_MOVEMENT_PHRASES.get(params.camera_movement, ""),
@@ -88,6 +92,10 @@ def build_style_suffix(params: VideoParams) -> str:
     ]
     if params.negative_prompt:
         parts.append(f"Avoid: {params.negative_prompt}")
+
+    # Note end-card intent in the prompt if provided (Veo has no native end-frame param)
+    if params.end_card_b64:
+        parts.append("End the video with a smooth, composed closing frame")
 
     return ", ".join(p for p in parts if p)
 
@@ -102,6 +110,11 @@ async def generate_branded_video(
 ) -> Tuple[str, str]:
     """
     Initiate video generation with Veo.
+
+    Conditioning image priority (highest wins):
+        1. start_card_b64 in video_params
+        2. reference_images_b64[0] in video_params
+        3. brand_references[0] (GCS URI / HTTPS URL)
 
     Args:
         user_prompt:        The (already enhanced) cinematic prompt.
@@ -125,8 +138,11 @@ async def generate_branded_video(
         segments.append(style_suffix)
     final_prompt = "\n\n".join(segments)
 
+    # Resolve the model: per-request override takes priority over global setting
+    model_id = params.veo_model.value
+
     logger.info(
-        f"Starting Veo generation | model={settings.VEO_MODEL} "
+        f"Starting Veo generation | model={model_id} "
         f"| duration={params.duration}s | aspect={params.aspect_ratio.value} "
         f"| prompt={final_prompt[:80]}…"
     )
@@ -137,26 +153,50 @@ async def generate_branded_video(
         duration_seconds=params.duration,
     )
 
-    # Image-conditioned generation: use first brand reference if available
+    # ── Conditioning image resolution ─────────────────────────────────────────
     image_param = None
-    if brand_references:
+
+    # 1. Start card (highest priority – defines the opening frame)
+    if params.start_card_b64:
+        try:
+            image_bytes = base64.b64decode(params.start_card_b64)
+            image_param = genai_types.Image(image_bytes=image_bytes)
+            logger.info("Using start_card_b64 as conditioning image")
+        except Exception as e:
+            logger.warning(f"Failed to decode start_card_b64, falling back: {e}")
+
+    # 2. First uploaded reference image
+    if image_param is None and params.reference_images_b64:
+        try:
+            image_bytes = base64.b64decode(params.reference_images_b64[0])
+            image_param = genai_types.Image(image_bytes=image_bytes)
+            logger.info(
+                f"Using reference_images_b64[0] as conditioning image "
+                f"({len(params.reference_images_b64)} ref image(s) provided)"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to decode reference_images_b64[0], falling back: {e}")
+
+    # 3. Brand reference images
+    if image_param is None and brand_references:
         first_ref = brand_references[0]
         if first_ref.startswith("gs://"):
             image_param = genai_types.Image(gcs_uri=first_ref)
         elif first_ref.startswith("http"):
             image_param = genai_types.Image(url=first_ref)
 
+    # ── Submit to Veo ─────────────────────────────────────────────────────────
     try:
         if image_param:
             operation = client.models.generate_videos(
-                model=settings.VEO_MODEL,
+                model=model_id,
                 prompt=final_prompt,
                 image=image_param,
                 config=video_config,
             )
         else:
             operation = client.models.generate_videos(
-                model=settings.VEO_MODEL,
+                model=model_id,
                 prompt=final_prompt,
                 config=video_config,
             )
@@ -187,10 +227,10 @@ async def poll_operation(operation_name: str) -> Dict[str, Any]:
         operation_obj = genai_types.GenerateVideosOperation(name=operation_name)
         operation = await asyncio.to_thread(client.operations.get, operation_obj)
         result: Dict[str, Any] = {
-            "done": operation.done,
-            "video_uri": None,
+            "done":        operation.done,
+            "video_uri":   None,
             "video_bytes": None,
-            "error": None,
+            "error":       None,
         }
 
         if operation.done:
@@ -237,8 +277,8 @@ async def poll_operation(operation_name: str) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error polling operation {operation_name}: {e}")
         return {
-            "done": False,
-            "video_uri": None,
+            "done":        False,
+            "video_uri":   None,
             "video_bytes": None,
-            "error": str(e),
+            "error":       str(e),
         }

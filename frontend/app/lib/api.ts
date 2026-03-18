@@ -2,38 +2,43 @@ const API_BASE = "";
 
 // ── Status & mode types ─────────────────────────────────────────────────────────
 
-export type VideoStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
+export type VideoStatus    = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
 export type GenerationMode = "video" | "image";
 
 // ── Brand ───────────────────────────────────────────────────────────────────────
 
 export interface Brand {
-  id: string;
-  name: string;
-  style_guide: string | null;
+  id:               string;
+  name:             string;
+  style_guide:      string | null;
   reference_images: string[];
-  created_at: string;
+  created_at:       string;
 }
 
 // ── Video / Asset ───────────────────────────────────────────────────────────────
 
 export interface Video {
-  id: string;
-  brand_id: string | null;
-  user_prompt: string;
+  id:              string;
+  brand_id:        string | null;
+  user_prompt:     string;
   enhanced_prompt: string | null;
-  status: VideoStatus;
-  video_url: string | null;
-  thumbnail_url: string | null;
-  error_message: string | null;
-  created_at: string;
-  updated_at: string;
+  status:          VideoStatus;
+  video_url:       string | null;
+  thumbnail_url:   string | null;
+  error_message:   string | null;
+  created_at:      string;
+  updated_at:      string;
 }
 
 // ── Generation parameter types ──────────────────────────────────────────────────
 
+export type VeoModel =
+  | "veo-2.0-generate-001"
+  | "veo-3.0-generate-preview"
+  | "veo-3.1-generate-preview";
+
 export type AspectRatio = "16:9" | "9:16" | "1:1" | "21:9" | "4:3";
-export type Quality = "standard" | "high" | "ultra";
+export type Quality     = "standard" | "high" | "ultra";
 
 export type CameraMovement =
   | "static"
@@ -45,20 +50,22 @@ export type CameraMovement =
   | "handheld"
   | "epic_tracking";
 
-export type MotionStrength = "subtle" | "medium" | "dynamic" | "epic";
+export type MotionStrength = "subtle" | "medium" | "dynamic" | "cinematic" | "epic";
 
 export type LightingStyle =
   | "golden_hour"
   | "dramatic"
   | "soft_natural"
   | "studio"
-  | "neon";
+  | "neon"
+  | "moody_low_key";
 
 export type VisualStyle =
   | "photorealistic"
   | "cinematic"
   | "artistic"
   | "commercial"
+  | "documentary"
   | "anime";
 
 export type ImageStyle =
@@ -71,70 +78,79 @@ export type ImageStyle =
   | "3d_render";
 
 export interface VideoParams {
-  duration: 5 | 8 | 10;
-  aspect_ratio: AspectRatio;
-  camera_movement: CameraMovement;
-  motion_strength: MotionStrength;
-  lighting_style: LightingStyle;
-  visual_style: VisualStyle;
-  quality: Quality;
-  seed?: number | null;
-  negative_prompt?: string | null;
+  veo_model:            VeoModel;
+  duration:             5 | 8 | 10;
+  aspect_ratio:         AspectRatio;
+  camera_movement:      CameraMovement;
+  motion_strength:      MotionStrength;
+  lighting_style:       LightingStyle;
+  visual_style:         VisualStyle;
+  quality:              Quality;
+  seed?:                number | null;
+  negative_prompt?:     string | null;
+  // Reference media (base64-encoded, inline)
+  reference_images_b64?: string[] | null;
+  start_card_b64?:       string | null;
+  end_card_b64?:         string | null;
 }
 
 export interface ImageParams {
-  aspect_ratio: AspectRatio;
-  style: ImageStyle;
-  quality: Quality;
+  aspect_ratio:     AspectRatio;
+  style:            ImageStyle;
+  quality:          Quality;
   number_of_images: 1 | 2 | 3 | 4;
-  seed?: number | null;
+  seed?:            number | null;
   negative_prompt?: string | null;
 }
 
 // ── Unified generation request ──────────────────────────────────────────────────
 
 export interface GenerateRequest {
-  brand_id: string;
-  mode: GenerationMode;
-  user_prompt: string;
-  enhance_prompt: boolean;
+  brand_id:                string;
+  mode:                    GenerationMode;
+  user_prompt:             string;
+  enhance_prompt:          boolean;
   additional_instructions?: string;
-  video_params?: VideoParams;
-  image_params?: ImageParams;
+  video_params?:           VideoParams;
+  image_params?:           ImageParams;
 }
 
 // ── Responses ───────────────────────────────────────────────────────────────────
 
 export interface GenerateResponse {
-  video_id: string;
-  video_ids: string[];
+  video_id:     string;
+  video_ids:    string[];
   operation_id: string | null;
-  status: VideoStatus;
-  message: string;
-  mode: GenerationMode;
+  status:       VideoStatus;
+  message:      string;
+  mode:         GenerationMode;
 }
 
 // ── Default parameter values ────────────────────────────────────────────────────
 
 export const DEFAULT_VIDEO_PARAMS: VideoParams = {
-  duration: 8,
-  aspect_ratio: "16:9",
+  veo_model:       "veo-2.0-generate-001",
+  duration:        8,
+  aspect_ratio:    "16:9",
   camera_movement: "static",
   motion_strength: "medium",
-  lighting_style: "soft_natural",
-  visual_style: "cinematic",
-  quality: "high",
-  seed: null,
+  lighting_style:  "soft_natural",
+  visual_style:    "cinematic",
+  quality:         "high",
+  seed:            null,
   negative_prompt: null,
+  reference_images_b64: null,
+  start_card_b64:  null,
+  end_card_b64:    null,
 };
 
 export const DEFAULT_IMAGE_PARAMS: ImageParams = {
-  aspect_ratio: "16:9",
-  style: "photorealistic",
-  quality: "high",
+  aspect_ratio:     "16:9",
+  style:            "photorealistic",
+  quality:          "high",
   number_of_images: 1,
-  seed: null,
-  negative_prompt: null,
+  seed:             null,
+  negative_prompt:  null,
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -202,8 +218,8 @@ export async function generateVideo(
   additionalInstructions?: string,
 ): Promise<GenerateResponse> {
   return generateAsset({
-    brand_id: brandId,
-    mode: "video",
+    brand_id:    brandId,
+    mode:        "video",
     user_prompt: userPrompt,
     enhance_prompt: true,
     additional_instructions: additionalInstructions,
@@ -249,5 +265,21 @@ export async function pollUntilDone(
         reject(e);
       }
     }, intervalMs);
+  });
+}
+
+// ── File helpers ─────────────────────────────────────────────────────────────────
+
+/** Read a File as a base64 data string (strips the data: prefix). */
+export async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = () => {
+      const result = reader.result as string;
+      // Strip "data:<mime>;base64," prefix — send only the raw base64 payload
+      resolve(result.split(",")[1]);
+    };
+    reader.onerror = () => reject(new Error("Failed to read file"));
+    reader.readAsDataURL(file);
   });
 }
