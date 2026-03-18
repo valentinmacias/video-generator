@@ -205,8 +205,8 @@ async def generate_endpoint(payload: GenerateRequest):
                 )
                 rp = payload.effective_runway_params()
                 logger.info(
-                    f"=== PRODUCTION RUNWAY {rp.runway_model.value.upper()}"
-                    f" — Credits WILL be deducted === [video={video_id}]"
+                    f"=== STRICT ROUTING: Using Runway {rp.runway_model.value.upper()}"
+                    f" via {settings.RUNWAY_API_BASE_URL} === [video={video_id}]"
                 )
                 operation_name, _ = await generate_runway_video(
                     prompt=final_prompt,

@@ -99,7 +99,7 @@ export function Sidebar() {
           <span className="text-xs font-semibold text-tt-accent">AI Powered</span>
         </div>
         <p className="text-[11px] leading-relaxed text-tt-muted">
-          Runway Gen-4 · Veo 3.1 · Imagen · Gemini
+          Runway Gen-4 Turbo · Gemini · Imagen
         </p>
         <button className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-tt-accent/10 px-3 py-2 text-[11px] font-semibold text-tt-accent hover:bg-tt-accent/20 transition-colors">
           View Docs <ChevronRight size={12} />

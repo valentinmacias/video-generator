@@ -1,14 +1,94 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Brand, GenerateResponse, listBrands, createBrand } from "./lib/api";
+import { useEffect, useRef, useState } from "react";
+import { Brand, GenerateResponse, Video, listBrands, createBrand, getVideo } from "./lib/api";
 import { GenerationForm } from "./components/GenerationForm";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Plus, X, ChevronDown, ChevronUp, Briefcase, Sparkles,
-  Upload, Check, Loader2,
+  Upload, Check, Loader2, ExternalLink, CheckCircle2,
 } from "lucide-react";
+import Link from "next/link";
 import { clsx } from "clsx";
+
+// ── Generating toast ──────────────────────────────────────────────────────────
+
+function GeneratingToast({
+  ids,
+  onDone,
+}: {
+  ids: string[];
+  onDone: (id: string) => void;
+}) {
+  const [statuses, setStatuses] = useState<Record<string, Video["status"]>>({});
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (ids.length === 0) return;
+    const active = ids.filter((id) => !["COMPLETED", "FAILED"].includes(statuses[id] ?? ""));
+    if (active.length === 0) return;
+
+    pollRef.current = setInterval(async () => {
+      await Promise.all(
+        active.map(async (id) => {
+          try {
+            const v = await getVideo(id);
+            setStatuses((prev) => ({ ...prev, [id]: v.status }));
+            if (v.status === "COMPLETED" || v.status === "FAILED") {
+              onDone(id);
+            }
+          } catch {}
+        }),
+      );
+    }, 6000);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ids.join(",")]);
+
+  if (ids.length === 0) return null;
+
+  const doneCount = ids.filter((id) => statuses[id] === "COMPLETED" || statuses[id] === "FAILED").length;
+  const activeCount = ids.length - doneCount;
+
+  return (
+    <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2">
+      {activeCount > 0 && (
+        <div className="flex items-center gap-3 rounded-2xl border border-tt-accent/30 bg-tt-card/95 backdrop-blur px-4 py-3 shadow-card-hover">
+          <div className="h-4 w-4 rounded-full border-2 border-tt-accent border-t-transparent animate-spin flex-shrink-0" />
+          <div>
+            <p className="text-xs font-bold text-tt-text">
+              {activeCount} video{activeCount !== 1 ? "s" : ""} generating…
+            </p>
+            <p className="text-[10px] text-tt-muted">⚡ Runway Gen-4 Turbo</p>
+          </div>
+          <Link
+            href="/library"
+            className="ml-2 flex items-center gap-1 rounded-lg border border-tt-accent/30 bg-tt-accent/10 px-2.5 py-1.5 text-[11px] font-semibold text-tt-accent hover:bg-tt-accent/20 transition-all"
+          >
+            View <ExternalLink size={10} />
+          </Link>
+        </div>
+      )}
+      {doneCount > 0 && activeCount === 0 && (
+        <div className="flex items-center gap-3 rounded-2xl border border-green-500/30 bg-tt-card/95 backdrop-blur px-4 py-3 shadow-card-hover">
+          <CheckCircle2 size={16} className="text-green-400 flex-shrink-0" />
+          <p className="text-xs font-bold text-tt-text">
+            {doneCount} video{doneCount !== 1 ? "s" : ""} ready
+          </p>
+          <Link
+            href="/library"
+            className="ml-2 flex items-center gap-1 rounded-lg border border-green-500/30 bg-green-500/10 px-2.5 py-1.5 text-[11px] font-semibold text-green-400 hover:bg-green-500/20 transition-all"
+          >
+            View <ExternalLink size={10} />
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ── Brand panel (collapsible) ─────────────────────────────────────────────────
 
@@ -115,7 +195,7 @@ function BrandPanel({
 export default function HomePage() {
   const [brands, setBrands]               = useState<Brand[]>([]);
   const [loadingBrands, setLoadingBrands] = useState(true);
-  const [pendingVideoIds, setPendingVideoIds] = useState<string[]>([]);
+  const [toastIds, setToastIds]           = useState<string[]>([]);
 
   useEffect(() => {
     listBrands()
@@ -130,10 +210,14 @@ export default function HomePage() {
 
   function handleVideoGenerated(response: GenerateResponse) {
     const ids = response.video_ids?.length ? response.video_ids : [response.video_id];
-    setPendingVideoIds((prev) => [...prev, ...ids]);
-    setTimeout(() => {
-      setPendingVideoIds((prev) => prev.filter((id) => !ids.includes(id)));
-    }, 10 * 60 * 1000);
+    setToastIds((prev) => [...new Set([...prev, ...ids])]);
+    // Safety-net: clear after 15 min regardless
+    setTimeout(() => setToastIds((prev) => prev.filter((id) => !ids.includes(id))), 15 * 60 * 1000);
+  }
+
+  function handleToastDone(id: string) {
+    // Leave it visible briefly in "ready" state, then clear after 5 s
+    setTimeout(() => setToastIds((prev) => prev.filter((i) => i !== id)), 5000);
   }
 
   return (
@@ -154,6 +238,9 @@ export default function HomePage() {
           <GenerationForm brands={brands} onGenerated={handleVideoGenerated} />
         )}
       </div>
+
+      {/* Generating / ready toast (bottom-right) */}
+      <GeneratingToast ids={toastIds} onDone={handleToastDone} />
     </div>
   );
 }
