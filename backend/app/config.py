@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     # Google AI
     GOOGLE_API_KEY: str
     VEO_MODEL: str = "veo-2.0-generate-001"
-    GEMINI_MODEL: str = "gemini-2.0-flash-lite"
+    GEMINI_MODEL: str = "gemini-2.5-pro-preview-03-25"
 
     # Supabase
     SUPABASE_URL: str
