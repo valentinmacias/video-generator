@@ -136,20 +136,19 @@ async def generate_runway_video(
     duration = runway_params.duration
     model = runway_params.runway_model.value
 
-    # Determine conditioning image (first-frame anchor)
+    # Determine conditioning image (explicit first-frame anchor only).
+    # Brand reference images are style references — they must NOT become the
+    # first frame, otherwise Runway just animates the brand image instead of
+    # generating new content from the prompt.
     prompt_image: Optional[str] = None
     if runway_params.conditioning_image_b64:
         prompt_image = f"data:image/jpeg;base64,{runway_params.conditioning_image_b64}"
     elif runway_params.reference_images_b64 and runway_params.reference_images_b64[0]:
         prompt_image = f"data:image/jpeg;base64,{runway_params.reference_images_b64[0]}"
-    elif brand_references:
-        ref = brand_references[0]
-        if ref.startswith("http"):
-            prompt_image = ref
 
     logger.info(
         f"Runway {model} | ratio={runway_ratio} | dur={duration}s"
-        f" | image={'yes' if prompt_image else 'text-only'}"
+        f" | mode={'image-to-video' if prompt_image else 'text-to-video'}"
     )
 
     def _submit():
@@ -161,7 +160,9 @@ async def generate_runway_video(
         )
         if prompt_image:
             kwargs["prompt_image"] = prompt_image
-        return client.image_to_video.create(**kwargs)
+            return client.image_to_video.create(**kwargs)
+        else:
+            return client.text_to_video.create(**kwargs)
 
     task = await asyncio.to_thread(_submit)
     logger.info(f"Runway task created: {task.id}")
