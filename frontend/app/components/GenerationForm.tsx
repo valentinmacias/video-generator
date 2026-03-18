@@ -5,8 +5,7 @@ import {
   Sparkles, Send, Film, ImageIcon, Info, ChevronDown, ChevronUp,
   Wand2, Eye, EyeOff, Zap, Clock, Maximize2, Camera, Wind,
   Sun, Palette, Star, Hash, Ban, Layers, Upload, X, Video,
-  Cpu, RefreshCw, Play, SquarePlay, AlertTriangle, Sliders,
-  Users, Clapperboard,
+  Cpu, RefreshCw, Play, SquarePlay, TriangleAlert,
 } from "lucide-react";
 import {
   Brand, GenerateResponse, GenerateRequest,
@@ -556,7 +555,7 @@ function ProviderSelector({
     <div className="space-y-1.5">
       <FieldLabel
         label="Generation Provider"
-        icon={Clapperboard}
+        icon={Film}
         tooltip="Choose which AI model generates the video. Kling 3.0 excels at copying UGC subject style; Veo produces the highest cinematic quality."
       />
       <div className="grid grid-cols-1 gap-2">
@@ -583,7 +582,7 @@ function ProviderSelector({
               <p className="mt-0.5 text-[10px] text-slate-500 leading-relaxed">{opt.desc}</p>
               {opt.warning && (
                 <div className="mt-1 flex items-center gap-1">
-                  <AlertTriangle className="h-2.5 w-2.5 text-amber-500 flex-shrink-0" />
+                  <TriangleAlert className="h-2.5 w-2.5 text-amber-500 flex-shrink-0" />
                   <span className="text-[9px] text-amber-500">{opt.warning}</span>
                 </div>
               )}
@@ -729,7 +728,7 @@ function KlingPanel({
       {/* Subject consistency + Motion intensity */}
       <KlingSlider
         label="Subject Consistency"
-        icon={Users}
+        icon={Layers}
         tooltip="How strictly the video follows subject/style from your reference. Higher = more faithful to reference."
         value={params.cfg_scale}
         onChange={(v) => onChange("cfg_scale", v)}
@@ -775,7 +774,7 @@ function KlingPanel({
             <div className="grid grid-cols-2 gap-3">
               <ImageDropZone
                 label="UGC Reference Frame"
-                icon={Users}
+                icon={Layers}
                 tooltip="A frame from your source UGC video. Kling uses this for subject/style consistency across the generated clip."
                 file={refImage}
                 onFile={setRef}
