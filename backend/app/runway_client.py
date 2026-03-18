@@ -158,7 +158,6 @@ async def generate_runway_video(
             prompt_text=full_prompt,
             duration=duration,
             ratio=runway_ratio,
-            watermark=False,
         )
         if prompt_image:
             kwargs["prompt_image"] = prompt_image
