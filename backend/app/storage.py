@@ -81,7 +81,7 @@ def _upload_video_from_https(url: str, video_id: str) -> Tuple[str, str]:
         download_url = f"{url}&key={settings.GOOGLE_API_KEY}"
 
     logger.info(f"Downloading video from Google Files API for video {video_id}")
-    with httpx.Client(timeout=120) as client:
+    with httpx.Client(timeout=120, follow_redirects=True) as client:
         resp = client.get(download_url)
         resp.raise_for_status()
         video_bytes = resp.content
