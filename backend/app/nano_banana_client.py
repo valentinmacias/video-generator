@@ -70,6 +70,7 @@ async def nano_edit_image(
             user_prompt=prompt,
             source_image_bytes=image_bytes,
             image_mime_type=mime,
+            enhance_prompt=False,   # send the user's prompt to Imagen unchanged
         )
     except PipelineError as exc:
         logger.error(

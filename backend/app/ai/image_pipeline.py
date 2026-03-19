@@ -95,48 +95,60 @@ class ImageGenerationPipeline:
         user_prompt: str,
         source_image_bytes: Optional[bytes] = None,
         image_mime_type: str = "image/jpeg",
+        enhance_prompt: bool = False,
     ) -> dict:
         """
         Run the full pipeline and return a result dict.
+
+        Parameters
+        ----------
+        enhance_prompt : bool
+            False (default) — send the user's prompt to Imagen unchanged.
+            True            — run through GeminiClient to expand the prompt first.
 
         Returns
         -------
         {
             "image_bytes":      bytes,
             "image_b64":        str,
-            "enhanced_prompt":  str,
+            "enhanced_prompt":  str,   # same as user_prompt when enhance_prompt=False
             "model":            str,
         }
 
         Raises PipelineError on unrecoverable failure.
         """
         logger.info(
-            "Pipeline start | has_source_image=%s | prompt=%.100s…",
+            "Pipeline start | enhance=%s | has_source_image=%s | prompt=%.100s…",
+            enhance_prompt,
             source_image_bytes is not None,
             user_prompt,
         )
 
-        # ── Step 1: describe source image (optional, best-effort) ──────────────
-        scene_description: Optional[str] = None
-        if source_image_bytes:
-            scene_description = await self._gemini.describe_image(
-                source_image_bytes,
-                mime_type=image_mime_type,
-            )
+        if enhance_prompt:
+            # ── Step 1: describe source image (optional, best-effort) ──────────
+            scene_description: Optional[str] = None
+            if source_image_bytes:
+                scene_description = await self._gemini.describe_image(
+                    source_image_bytes,
+                    mime_type=image_mime_type,
+                )
 
-        # ── Step 2: enhance the swap instruction ───────────────────────────────
-        enhanced_prompt = await self._gemini.enhance_prompt(
-            swap_instruction=user_prompt,
-            scene_description=scene_description,
-        )
+            # ── Step 2: enhance the swap instruction ───────────────────────────
+            final_prompt = await self._gemini.enhance_prompt(
+                swap_instruction=user_prompt,
+                scene_description=scene_description,
+            )
+        else:
+            # Raw mode — user's prompt goes straight to Imagen, unchanged
+            final_prompt = user_prompt
 
         # ── Step 3: generate image with Imagen 3 ───────────────────────────────
-        image_bytes = await self._imagen.generate_image(enhanced_prompt)
+        image_bytes = await self._imagen.generate_image(final_prompt)
 
         result = {
             "image_bytes":     image_bytes,
             "image_b64":       base64.b64encode(image_bytes).decode(),
-            "enhanced_prompt": enhanced_prompt,
+            "enhanced_prompt": final_prompt,
             "model":           self._imagen._model_name,
         }
         logger.info(
