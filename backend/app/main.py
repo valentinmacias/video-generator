@@ -26,6 +26,7 @@ from .database import (
     get_symphony_video, update_avatar_nano_reference,
 )
 from .nano_banana_client import nano_edit_image, download_nano_result
+from google.genai.errors import ClientError as GeminiClientError
 from .gemini_client import enhance_prompt
 from .veo_client import generate_branded_video
 from .kling_client import generate_kling_video
@@ -514,6 +515,10 @@ async def symphony_nano_edit(
             prompt=prompt,
             image_content_type=image.content_type or "image/jpeg",
         )
+    except GeminiClientError as e:
+        status = getattr(e, "status_code", 502)
+        logger.error("Gemini API error during nano-edit: %s", e)
+        raise HTTPException(status_code=status, detail=f"Gemini API error: {e}")
     except ValueError as e:
         raise HTTPException(status_code=503, detail=str(e))
     except RuntimeError as e:
