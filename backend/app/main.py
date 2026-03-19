@@ -505,6 +505,9 @@ async def symphony_nano_edit(
     image: UploadFile = File(..., description="Source image/keyframe (JPEG/PNG/WebP, max 10MB)"),
     prompt: str = Form(..., description="Edit instruction, e.g. 'Change to Latina woman in red hoodie'"),
     avatar_id: Optional[str] = Form(None, description="If provided, store result on this avatar"),
+    image_strength: float = Form(0.22, description="Edit intensity 0.1–0.35 (default 0.22)"),
+    guidance_scale: float = Form(4.5, description="Prompt adherence 3–7 (default 4.5)"),
+    seed: Optional[int] = Form(None, description="Deterministic seed for reproducible results"),
 ):
     """
     Step 2 of Symphony: Nano Banana face / ethnicity / clothes swap.
@@ -532,6 +535,9 @@ async def symphony_nano_edit(
             image_bytes=image_bytes,
             prompt=prompt,
             image_content_type=image.content_type or "image/jpeg",
+            image_strength=image_strength,
+            guidance_scale=guidance_scale,
+            seed=seed,
         )
     except PipelineError as e:
         logger.error("Pipeline error during nano-edit [%s]: %s", e.error_type.value, e.message)
