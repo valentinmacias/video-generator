@@ -73,7 +73,7 @@ async def nano_edit_image(
         config=types.EditImageConfig(
             edit_mode=types.EditMode.EDIT_MODE_DEFAULT,
             number_of_images=1,
-            safety_filter_level=types.SafetyFilterLevel.BLOCK_SOME,
+            safety_filter_level=types.SafetyFilterLevel.BLOCK_NONE,
             person_generation=types.PersonGeneration.ALLOW_ADULT,
         ),
     )
