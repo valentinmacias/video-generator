@@ -33,10 +33,13 @@ import asyncio
 import io
 import logging
 import threading
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-import numpy as np
-from PIL import Image as PILImage
+# Heavy deps (numpy, Pillow, rembg, cv2) are imported lazily inside functions
+# so a missing package does NOT prevent this module from loading and does NOT
+# break the existing generation-pipeline fallback path.
+if TYPE_CHECKING:
+    from PIL import Image as PILImage
 
 from .ai import ImageGenerationPipeline, PipelineError
 from .ai.image_edit_params import ImageEditParams
@@ -83,9 +86,10 @@ def _get_pipeline() -> ImageGenerationPipeline:
 
 # ── Mask → PNG bytes helper ────────────────────────────────────────────────────
 
-def _mask_to_png_bytes(mask: np.ndarray) -> bytes:
+def _mask_to_png_bytes(mask) -> bytes:
     """Convert a HxW uint8 mask to grayscale PNG bytes for Imagen."""
-    pil_mask = PILImage.fromarray(mask, mode="L")
+    from PIL import Image as _PIL  # noqa: PLC0415
+    pil_mask = _PIL.fromarray(mask, mode="L")
     buf = io.BytesIO()
     pil_mask.save(buf, format="PNG")
     return buf.getvalue()
@@ -94,10 +98,10 @@ def _mask_to_png_bytes(mask: np.ndarray) -> bytes:
 # ── Core edit function ─────────────────────────────────────────────────────────
 
 def edit_person_identity(
-    image: PILImage.Image,
+    image,
     prompt: str,
     params: ImageEditParams,
-) -> PILImage.Image:
+):
     """
     Edit the person region in *image* using Imagen inpainting.
 
@@ -121,6 +125,7 @@ def edit_person_identity(
     total_px = h * w
 
     # ── Step 1: PIL → numpy RGB ────────────────────────────────────────────────
+    import numpy as np  # noqa: PLC0415 — lazy to avoid top-level import failure
     img_rgb = np.array(image.convert("RGB"))
 
     # ── Step 2: person segmentation ───────────────────────────────────────────
@@ -210,7 +215,8 @@ def edit_person_identity(
             return image
         return pil_result.convert("RGB")
 
-    return PILImage.open(io.BytesIO(raw)).convert("RGB")
+    from PIL import Image as _PIL  # noqa: PLC0415
+    return _PIL.open(io.BytesIO(raw)).convert("RGB")
 
 
 # ── Public async API ───────────────────────────────────────────────────────────
@@ -286,15 +292,20 @@ async def nano_edit_image(
 
     # ── Decode source image ────────────────────────────────────────────────────
     try:
-        source_pil = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+        from PIL import Image as _PIL  # noqa: PLC0415
+        source_pil = _PIL.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception as exc:
         logger.error("Failed to decode source image: %s", exc)
         raise RuntimeError(f"Invalid source image: {exc}") from exc
 
     # ── Attempt masked edit (runs in thread — segmentation + Imagen are sync) ──
+    # Hard 30-second timeout guards against rembg model download on first use
+    # or any other blocking operation inside the thread.
+    _EDIT_TIMEOUT_S = 30.0
     try:
-        edited_pil = await asyncio.to_thread(
-            edit_person_identity, source_pil, prompt, params
+        edited_pil = await asyncio.wait_for(
+            asyncio.to_thread(edit_person_identity, source_pil, prompt, params),
+            timeout=_EDIT_TIMEOUT_S,
         )
 
         # Encode result
@@ -321,36 +332,53 @@ async def nano_edit_image(
             f"Image edit failed [{exc.error_type.value}]: {exc.message}"
         ) from exc
 
+    except asyncio.TimeoutError:
+        logger.warning(
+            "SEGMENTATION_FALLBACK: edit_person_identity timed out after %.0fs "
+            "— falling back to full-frame generation",
+            _EDIT_TIMEOUT_S,
+        )
+        # fall through to fallback below
+        return await _run_generation_fallback(image_bytes, mime, prompt)
+
     except Exception as exc:
         logger.error(
             "Edit-mode failed (%s) — falling back to full-frame generation", exc,
             exc_info=True,
         )
-        # ── Fallback: full-frame Imagen generation (original behaviour) ────────
-        logger.warning("SEGMENTATION_FALLBACK: using full-frame generation pipeline")
-        try:
-            result = await _get_pipeline().generate(
-                user_prompt=prompt,
-                source_image_bytes=image_bytes,
-                image_mime_type=mime,
-                enhance_prompt=False,
-            )
-            return {
-                "edited_image_url": None,
-                "edited_image_b64": result["image_b64"],
-                "request_id":       result["model"],
-                "original_prompt":  prompt,
-                "enhanced_prompt":  result["enhanced_prompt"],
-            }
-        except PipelineError as exc2:
-            logger.error(
-                "Fallback pipeline error [%s]: %s",
-                exc2.error_type.value,
-                exc2.message,
-            )
-            raise RuntimeError(
-                f"Image generation failed [{exc2.error_type.value}]: {exc2.message}"
-            ) from exc2
+        return await _run_generation_fallback(image_bytes, mime, prompt)
+
+
+async def _run_generation_fallback(
+    image_bytes: bytes,
+    mime: str,
+    prompt: str,
+) -> dict:
+    """Full-frame Imagen generation — original pre-masking behaviour."""
+    logger.warning("SEGMENTATION_FALLBACK: using full-frame generation pipeline")
+    try:
+        result = await _get_pipeline().generate(
+            user_prompt=prompt,
+            source_image_bytes=image_bytes,
+            image_mime_type=mime,
+            enhance_prompt=False,
+        )
+        return {
+            "edited_image_url": None,
+            "edited_image_b64": result["image_b64"],
+            "request_id":       result["model"],
+            "original_prompt":  prompt,
+            "enhanced_prompt":  result["enhanced_prompt"],
+        }
+    except PipelineError as exc2:
+        logger.error(
+            "Fallback pipeline error [%s]: %s",
+            exc2.error_type.value,
+            exc2.message,
+        )
+        raise RuntimeError(
+            f"Image generation failed [{exc2.error_type.value}]: {exc2.message}"
+        ) from exc2
 
 
 async def download_nano_result(url: str) -> bytes:

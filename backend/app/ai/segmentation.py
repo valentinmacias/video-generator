@@ -15,9 +15,12 @@ from __future__ import annotations
 import io
 import logging
 import threading
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-import numpy as np
+# numpy is imported lazily inside get_person_mask() so a missing package
+# does NOT prevent the module from loading.
+if TYPE_CHECKING:
+    import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +83,7 @@ class PersonSegmenter:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def get_person_mask(self, image: np.ndarray) -> Optional[np.ndarray]:
+    def get_person_mask(self, image: Any) -> Optional[Any]:
         """
         Segment the person in *image* and return a uint8 HxW mask.
 
@@ -97,6 +100,8 @@ class PersonSegmenter:
             Returns None if segmentation fails (FAILSAFE — never crashes).
         """
         try:
+            import numpy as np  # noqa: PLC0415 — lazy to avoid top-level import failure
+
             self._ensure_session()
             if self._session == "FAILED":
                 logger.warning("SEGMENTATION_FALLBACK: rembg session unavailable")
@@ -144,7 +149,7 @@ class PersonSegmenter:
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
 
-def _keep_largest_central_blob(mask: np.ndarray) -> np.ndarray:
+def _keep_largest_central_blob(mask: Any) -> Any:
     """
     Given a uint8 mask from rembg, return a mask containing only the largest
     blob that is closest to the image centre.  This avoids picking up small
@@ -154,6 +159,7 @@ def _keep_largest_central_blob(mask: np.ndarray) -> np.ndarray:
     no valid contours are found.
     """
     try:
+        import numpy as np  # noqa: PLC0415
         import cv2  # noqa: PLC0415
 
         binary = (mask > 127).astype(np.uint8) * 255
