@@ -19,79 +19,20 @@ Orchestrates the two-step brand-swap flow:
 
 Gemini is NEVER asked to produce image output.
 Imagen is ALWAYS called with generateImages() — never predict() or generateContent().
+Auth is handled entirely by app.ai.auth — never inline here.
 """
 from __future__ import annotations
 
 import base64
-import json
 import logging
-import os
 from typing import Optional
 
-import vertexai
-
+from .auth          import initialize_vertex_ai, get_project_id
 from .gemini_client import GeminiClient
-from .imagen_client  import ImagenClient
-from .models         import PipelineError, PipelineErrorType
+from .imagen_client import ImagenClient
+from .models        import PipelineError, PipelineErrorType
 
 logger = logging.getLogger(__name__)
-
-
-def _resolve_project_id() -> str:
-    """
-    Resolve the GCP project ID using the first source that works:
-
-    1. settings.GCS_PROJECT_ID          (explicit env var — fastest)
-    2. settings.GCS_CREDENTIALS_JSON    (inline service-account JSON string)
-    3. settings.GOOGLE_APPLICATION_CREDENTIALS  (path to SA JSON file)
-    4. GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT    (GCP runtime env vars)
-
-    Raises PipelineError(AUTH_ERROR) if none succeed.
-    """
-    from ..config import settings  # noqa: PLC0415
-
-    # 1. Explicit setting
-    if settings.GCS_PROJECT_ID:
-        return settings.GCS_PROJECT_ID
-
-    # 2. Inline JSON string
-    if settings.GCS_CREDENTIALS_JSON:
-        try:
-            data = json.loads(settings.GCS_CREDENTIALS_JSON)
-            if pid := data.get("project_id"):
-                logger.info("Resolved GCP project_id from GCS_CREDENTIALS_JSON: %s", pid)
-                return pid
-        except json.JSONDecodeError:
-            pass
-
-    # 3. Path to JSON key file
-    creds_path = (
-        settings.GOOGLE_APPLICATION_CREDENTIALS
-        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    )
-    if creds_path and os.path.isfile(creds_path):
-        try:
-            with open(creds_path) as fh:
-                data = json.load(fh)
-            if pid := data.get("project_id"):
-                logger.info("Resolved GCP project_id from credentials file: %s", pid)
-                return pid
-        except (OSError, json.JSONDecodeError):
-            pass
-
-    # 4. Runtime env vars set by GCP infra (Cloud Run, GKE, etc.)
-    for env_key in ("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCP_PROJECT"):
-        if pid := os.environ.get(env_key):
-            logger.info("Resolved GCP project_id from env %s: %s", env_key, pid)
-            return pid
-
-    raise PipelineError(
-        PipelineErrorType.AUTH_ERROR,
-        "Cannot determine GCP project ID. "
-        "Set GCS_PROJECT_ID in your .env, or ensure GOOGLE_APPLICATION_CREDENTIALS "
-        "points to a valid service-account JSON file that contains 'project_id'.",
-        retryable=False,
-    )
 
 
 class ImageGenerationPipeline:
@@ -108,20 +49,16 @@ class ImageGenerationPipeline:
     image_bytes = result["image_bytes"]
 
     All errors surface as PipelineError with .to_dict() for structured logging.
+    Auth errors are always PipelineErrorType.AUTH_ERROR — never REGION_ERROR.
     """
 
     def __init__(
         self,
         gemini: GeminiClient,
         imagen: ImagenClient,
-        project_id: str,
-        region: str = "us-central1",
     ) -> None:
-        self._gemini     = gemini
-        self._imagen     = imagen
-        self._project_id = project_id
-        self._region     = region
-        self._vx_ready   = False
+        self._gemini = gemini
+        self._imagen = imagen
 
     # ── Factory ────────────────────────────────────────────────────────────────
 
@@ -129,17 +66,18 @@ class ImageGenerationPipeline:
     def default(
         cls,
         *,
-        imagen_model: str = "imagen-3.0-generate-002",
         aspect_ratio: str = "1:1",
     ) -> "ImageGenerationPipeline":
         """
         Create a pipeline from settings.
-        Use imagen_model="imagen-3.0-fast-generate-001" for the fast variant.
+        Vertex AI is initialised here so startup errors surface immediately.
         """
         from ..config import settings  # noqa: PLC0415
 
-        project_id = _resolve_project_id()
-        model      = getattr(settings, "VERTEX_IMAGEN_MODEL", imagen_model)
+        # Auth + vertexai.init() — raises PipelineError(AUTH_ERROR) on failure
+        initialize_vertex_ai()
+
+        model = settings.VERTEX_IMAGEN_MODEL
 
         gemini = GeminiClient()
         imagen = ImagenClient(
@@ -148,27 +86,7 @@ class ImageGenerationPipeline:
             safety_filter_level="block_some",
             person_generation="allow_adult",
         )
-        return cls(gemini=gemini, imagen=imagen, project_id=project_id)
-
-    # ── Vertex AI bootstrap ────────────────────────────────────────────────────
-
-    def _ensure_vertex(self) -> None:
-        """Call vertexai.init() once per process."""
-        if self._vx_ready:
-            return
-        if not self._project_id:
-            raise PipelineError(
-                PipelineErrorType.AUTH_ERROR,
-                "GCS_PROJECT_ID is required for Vertex AI. Set it in your .env.",
-                retryable=False,
-            )
-        vertexai.init(project=self._project_id, location=self._region)
-        self._vx_ready = True
-        logger.info(
-            "Vertex AI bootstrap | project=%s | region=%s",
-            self._project_id,
-            self._region,
-        )
+        return cls(gemini=gemini, imagen=imagen)
 
     # ── Main entry point ───────────────────────────────────────────────────────
 
@@ -192,8 +110,6 @@ class ImageGenerationPipeline:
 
         Raises PipelineError on unrecoverable failure.
         """
-        self._ensure_vertex()
-
         logger.info(
             "Pipeline start | has_source_image=%s | prompt=%.100s…",
             source_image_bytes is not None,

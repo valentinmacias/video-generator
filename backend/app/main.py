@@ -27,6 +27,7 @@ from .database import (
 )
 from .nano_banana_client import nano_edit_image, download_nano_result
 from .ai import PipelineError
+from .ai.auth import initialize_vertex_ai
 from .gemini_client import enhance_prompt
 from .veo_client import generate_branded_video
 from .kling_client import generate_kling_video
@@ -43,6 +44,23 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ── Vertex AI auth validation ──────────────────────────────────────────────
+    # Runs before the first request. Surfaces credential problems immediately
+    # with a clear AUTH_ERROR instead of a confusing model/region error later.
+    try:
+        project_id = initialize_vertex_ai()
+        logger.info("Startup check passed | Vertex AI ready | project=%s", project_id)
+    except PipelineError as exc:
+        # Log and continue — don't prevent startup for deployments that
+        # don't use the image pipeline (e.g. video-only modes).
+        logger.error(
+            "Vertex AI startup check FAILED [%s]: %s",
+            exc.error_type.value,
+            exc.message,
+        )
+    except Exception as exc:
+        logger.error("Vertex AI startup check FAILED (unexpected): %s", exc)
+
     start_worker()
     yield
     stop_worker()

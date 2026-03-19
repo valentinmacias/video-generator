@@ -60,27 +60,23 @@ class GeminiClient:
     # ── Initialisation ─────────────────────────────────────────────────────────
 
     def _init(self) -> None:
-        """Initialise Vertex AI — called once per process."""
+        """
+        Ensure Vertex AI is initialised — delegates entirely to auth.py.
+        vertexai.init() is idempotent; calling it again after startup is a no-op.
+        """
         if self._ready:
             return
 
-        # Import inside method: defers heavy SDK import to first use
-        import vertexai                                         # noqa: PLC0415
-        from ..config import settings                           # noqa: PLC0415
-        from .image_pipeline import _resolve_project_id        # noqa: PLC0415
+        from ..config import settings   # noqa: PLC0415
+        from .auth import initialize_vertex_ai, get_project_id  # noqa: PLC0415
 
-        project_id = _resolve_project_id()
+        # initialize_vertex_ai() is safe to call multiple times — skips if already done
+        initialize_vertex_ai()
 
-        self._project_id = project_id
+        self._project_id = get_project_id()
         self._model_name = settings.VERTEX_GEMINI_MODEL
-
-        vertexai.init(project=project_id, location="us-central1")
-        self._ready = True
-        logger.info(
-            "Vertex AI initialised | project=%s | gemini_model=%s",
-            project_id,
-            self._model_name,
-        )
+        self._ready      = True
+        logger.info("GeminiClient ready | model=%s", self._model_name)
 
     def _build_model(self, system_instruction: str):
         """Return a GenerativeModel instance (cheap — no network call)."""

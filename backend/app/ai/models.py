@@ -58,41 +58,82 @@ class PipelineError(Exception):
 
 def classify_vertex_error(exc: Exception) -> PipelineError:
     """
-    Map a raw Vertex AI / gRPC exception to a typed PipelineError.
+    Map a raw Vertex AI / gRPC / google-auth exception to a typed PipelineError.
     Never raises — always returns a PipelineError.
+
+    Order matters: type-checks run first so google-auth exceptions are never
+    mis-labelled as REGION_ERROR by the string-matching fallback.
     """
+    # ── Type-based classification (highest priority) ───────────────────────────
+    try:
+        import google.auth.exceptions  # noqa: PLC0415
+        if isinstance(exc, google.auth.exceptions.DefaultCredentialsError):
+            return PipelineError(
+                PipelineErrorType.AUTH_ERROR,
+                "AUTH_ERROR: Google Cloud credentials not configured. "
+                "Set GCS_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS. "
+                f"Detail: {exc}",
+                retryable=False,
+            )
+        if isinstance(exc, google.auth.exceptions.TransportError):
+            return PipelineError(
+                PipelineErrorType.AUTH_ERROR,
+                f"Network error during Google auth: {exc}",
+                retryable=True,
+            )
+    except ImportError:
+        pass
+
+    # ── String-based classification (fallback) ─────────────────────────────────
     msg = str(exc).lower()
 
-    if any(k in msg for k in ("404", "not found", "does not exist")):
+    # Auth / permission — check BEFORE 404 to avoid mis-labelling
+    if any(k in msg for k in (
+        "unauthenticated", "permission denied", "access denied",
+        "credentials", "defaultcredentialserror", "could not automatically determine",
+    )):
         return PipelineError(
-            PipelineErrorType.REGION_ERROR,
-            f"Model not found — verify model name and region (us-central1). Detail: {exc}",
+            PipelineErrorType.AUTH_ERROR,
+            f"Authentication failed — check service-account credentials. Detail: {exc}",
             retryable=False,
         )
+
+    if any(k in msg for k in ("403",)):
+        return PipelineError(
+            PipelineErrorType.AUTH_ERROR,
+            f"Permission denied (HTTP 403) — verify IAM roles on the service account. Detail: {exc}",
+            retryable=False,
+        )
+
+    # Model not found — only after auth checks pass
+    if any(k in msg for k in ("404", "not found", "does not exist")):
+        return PipelineError(
+            PipelineErrorType.MODEL_ERROR,
+            f"Model not found — verify model name and that it is available in us-central1. Detail: {exc}",
+            retryable=False,
+        )
+
     if any(k in msg for k in ("invalid_argument", "invalid argument", "400")):
         return PipelineError(
             PipelineErrorType.MODEL_ERROR,
             f"Invalid argument — check model / modality config. Detail: {exc}",
             retryable=False,
         )
+
     if any(k in msg for k in ("429", "quota", "resource_exhausted", "rate limit")):
         return PipelineError(
             PipelineErrorType.QUOTA_ERROR,
             f"Quota exceeded — back-off and retry. Detail: {exc}",
             retryable=True,
         )
-    if any(k in msg for k in ("unauthenticated", "credentials", "permission denied", "403")):
-        return PipelineError(
-            PipelineErrorType.AUTH_ERROR,
-            f"Authentication failed — check service-account credentials. Detail: {exc}",
-            retryable=False,
-        )
+
     if any(k in msg for k in ("safety", "blocked", "policy")):
         return PipelineError(
             PipelineErrorType.SAFETY_ERROR,
             f"Safety filter blocked the request — rephrase the prompt. Detail: {exc}",
             retryable=False,
         )
+
     return PipelineError(
         PipelineErrorType.UNKNOWN_ERROR,
         f"Unexpected error: {exc}",
