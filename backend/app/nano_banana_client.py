@@ -1,8 +1,7 @@
 """
 Image editing client — Gemini ("Nano Banana 2")
 ────────────────────────────────────────────────
-Primary:  gemini-2.0-flash-001   (stable 2026 release, supports IMAGE modality)
-Fallback: gemini-1.5-pro         (higher reasoning; IMAGE modality fallback)
+Model: gemini-2.5-pro  (no fallback)
 
 Accepts a source image + natural-language prompt and returns an edited image.
 Optimised for ethnicity / face / clothes swap prompts.
@@ -19,8 +18,7 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
-_PRIMARY_MODEL  = "gemini-2.0-flash-001"
-_FALLBACK_MODEL = "gemini-1.5-pro"
+_MODEL = "gemini-2.5-pro"
 
 # ── System instruction ─────────────────────────────────────────────────────────
 _SYSTEM_INSTRUCTION = (
@@ -134,8 +132,8 @@ async def nano_edit_image(
     enriched_prompt = _enrich_prompt(prompt)
 
     logger.info(
-        "Gemini image-edit | primary=%s | size=%dKB | prompt=%.140s",
-        _PRIMARY_MODEL,
+        "Gemini image-edit | model=%s | size=%dKB | prompt=%.140s",
+        _MODEL,
         len(image_bytes) // 1024,
         enriched_prompt,
     )
@@ -159,35 +157,27 @@ async def nano_edit_image(
         top_p=0.95,
     )
 
-    # ── Primary ────────────────────────────────────────────────────────────────
-    result_bytes = _call_model(client, _PRIMARY_MODEL, contents, config)
-    model_used   = _PRIMARY_MODEL
-
-    # ── Fallback ───────────────────────────────────────────────────────────────
-    if result_bytes is None:
-        logger.info("Primary failed — trying fallback model=%s", _FALLBACK_MODEL)
-        result_bytes = _call_model(client, _FALLBACK_MODEL, contents, config)
-        model_used   = _FALLBACK_MODEL
+    result_bytes = _call_model(client, _MODEL, contents, config)
 
     if result_bytes is None:
         raise RuntimeError(
-            "Image editing failed: both models returned no image. "
+            "Image editing failed: model returned no image. "
             "The prompt may have triggered safety filters — try adding "
             "'photorealistic, respectful representation' to the description. "
-            f"(primary={_PRIMARY_MODEL}, fallback={_FALLBACK_MODEL})"
+            f"(model={_MODEL})"
         )
 
     result_b64 = base64.b64encode(result_bytes).decode("utf-8")
     logger.info(
         "Gemini image-edit complete | model=%s | output_size=%dKB",
-        model_used,
+        _MODEL,
         len(result_bytes) // 1024,
     )
 
     return {
         "edited_image_url": None,
         "edited_image_b64": result_b64,
-        "request_id":       model_used,
+        "request_id":       _MODEL,
         "original_prompt":  prompt,
     }
 
