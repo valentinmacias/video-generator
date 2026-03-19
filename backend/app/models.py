@@ -317,3 +317,57 @@ class TrainCreatorResponse(BaseModel):
     avatar_id:       str
     training_job_id: str
     message:         str
+
+
+# ── Symphony Video Creator schemas ─────────────────────────────────────────────
+
+class NanoEditResponse(BaseModel):
+    """Returned by POST /api/symphony/nano-edit after a Nano Banana edit."""
+    edited_image_url:  Optional[str]  = None  # hosted HTTPS URL
+    edited_image_b64:  Optional[str]  = None  # inline base64 fallback
+    nano_request_id:   str
+    original_prompt:   str
+    gcs_url:           Optional[str]  = None  # GCS-stored copy for later use
+
+
+class SymphonyGenerateRequest(BaseModel):
+    """
+    Full Symphony generation payload.
+    model must be exactly 'runway' or 'veo' — never silently defaulted.
+    """
+    model_config = ConfigDict(protected_namespaces=())
+
+    # Required
+    edited_image_url:  str   = Field(..., description="Nano Banana edited image URL or GCS URL")
+    model:             Literal["runway", "veo"]   # EXACT value — no fallback
+    prompt:            str   = Field(..., min_length=10, max_length=800)
+
+    # Optional
+    avatar_id:         Optional[str]  = None  # Supabase avatar ID (for custom_model_id)
+    original_video_key: Optional[str] = None  # GCS key of the raw UGC upload
+    brand_id:          Optional[str]  = None
+    aspect_ratio:      str            = "9:16"   # TikTok default
+    duration:          Literal[5, 10] = 5
+    enhance_prompt:    bool           = True
+
+
+class SymphonyGenerateResponse(BaseModel):
+    """Returned immediately after submitting a Symphony generation."""
+    job_id:            str           # maps to videos.id in Supabase
+    status:            VideoStatus
+    message:           str
+    model_used:        str           # "runway" | "veo"
+    estimated_seconds: int           = 120
+
+
+class SymphonyJobStatusResponse(BaseModel):
+    """Returned by GET /api/symphony/status/{job_id}."""
+    job_id:           str
+    status:           VideoStatus
+    video_url:        Optional[str]  = None
+    nano_reference_url: Optional[str] = None
+    model_used:       Optional[str]  = None
+    error_message:    Optional[str]  = None
+    progress:         int            = 0    # 0-100 estimate
+    created_at:       Optional[datetime] = None
+    updated_at:       Optional[datetime] = None

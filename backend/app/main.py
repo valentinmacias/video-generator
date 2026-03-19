@@ -14,13 +14,18 @@ from .models import (
     GenerateRequest, GenerationMode,
     VideoStatus, PromptEnhanceRequest, PromptEnhanceResponse,
     AvatarResponse, TrainCreatorResponse,
+    NanoEditResponse, SymphonyGenerateRequest,
+    SymphonyGenerateResponse, SymphonyJobStatusResponse,
 )
 from .database import (
     create_brand, get_brand, list_brands, update_brand_images,
     create_video, update_video_operation, update_video_completed,
     update_video_failed, get_video, list_videos,
     create_avatar, update_avatar_training, get_avatar, list_avatars,
+    create_symphony_video, update_symphony_job_id,
+    get_symphony_video, update_avatar_nano_reference,
 )
+from .nano_banana_client import nano_edit_image, download_nano_result
 from .gemini_client import enhance_prompt
 from .veo_client import generate_branded_video
 from .kling_client import generate_kling_video
@@ -469,3 +474,305 @@ async def get_video_endpoint(video_id: str):
 async def list_videos_endpoint(brand_id: Optional[str] = None, limit: int = 20):
     videos = await list_videos(brand_id=brand_id, limit=limit)
     return [VideoResponse(**v) for v in videos]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Symphony Video Creator endpoints
+# Flow: Upload UGC → Nano Banana edit → Avatar select → Model select → Generate
+# ══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/symphony/nano-edit", response_model=NanoEditResponse)
+async def symphony_nano_edit(
+    image: UploadFile = File(..., description="Source image/keyframe (JPEG/PNG/WebP, max 10MB)"),
+    prompt: str = Form(..., description="Edit instruction, e.g. 'Change to Latina woman in red hoodie'"),
+    avatar_id: Optional[str] = Form(None, description="If provided, store result on this avatar"),
+):
+    """
+    Step 2 of Symphony: Nano Banana face / ethnicity / clothes swap.
+
+    - Accepts a single image and a natural-language swap prompt.
+    - Calls the Nano Banana edit API.
+    - Uploads the result to GCS for durable storage.
+    - Optionally saves the result URL on an avatar record.
+    - Returns the edited image URL for the before/after preview.
+    """
+    if not settings.NANO_BANANA_API_KEY:
+        raise HTTPException(
+            status_code=503,
+            detail="NANO_BANANA_API_KEY is not configured. Add it to your .env file.",
+        )
+
+    allowed_types = {"image/jpeg", "image/png", "image/webp"}
+    if image.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image type: {image.content_type}. Use JPEG, PNG or WebP.",
+        )
+
+    image_bytes = await image.read()
+    if len(image_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Image exceeds the 10MB limit.")
+
+    # ── Call Nano Banana ───────────────────────────────────────────────────────
+    try:
+        nano_result = await nano_edit_image(
+            image_bytes=image_bytes,
+            prompt=prompt,
+            image_content_type=image.content_type or "image/jpeg",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    # ── Upload result to GCS for durable storage ──────────────────────────────
+    gcs_url: Optional[str] = None
+    edited_url = nano_result.get("edited_image_url")
+    edited_b64 = nano_result.get("edited_image_b64")
+
+    try:
+        result_bytes: Optional[bytes] = None
+        if edited_url:
+            result_bytes = await download_nano_result(edited_url)
+        elif edited_b64:
+            import base64 as _b64
+            result_bytes = _b64.b64decode(edited_b64)
+
+        if result_bytes:
+            import uuid as _uuid
+            gcs_uri = upload_file(
+                file_bytes=result_bytes,
+                content_type="image/jpeg",
+                folder="symphony/nano_edits",
+                filename=f"{_uuid.uuid4()}.jpg",
+            )
+            # Convert gs:// → signed HTTPS for frontend display
+            blob_name = gcs_uri.replace(f"gs://{settings.GCS_BUCKET_NAME}/", "")
+            gcs_url = generate_signed_url(blob_name, expiration_minutes=60 * 24 * 7)
+    except Exception as e:
+        logger.warning(f"GCS upload of Nano Banana result failed (non-fatal): {e}")
+
+    final_url = gcs_url or edited_url  # prefer our GCS copy
+
+    # ── Optionally persist on the avatar record ────────────────────────────────
+    if avatar_id and final_url:
+        try:
+            await update_avatar_nano_reference(avatar_id, final_url)
+        except Exception as e:
+            logger.warning(f"Could not update avatar nano_reference_image: {e}")
+
+    logger.info(
+        f"Symphony nano-edit complete | nano_id={nano_result['request_id']} | "
+        f"gcs={bool(gcs_url)} | avatar={avatar_id}"
+    )
+
+    return NanoEditResponse(
+        edited_image_url=final_url,
+        edited_image_b64=edited_b64 if not gcs_url else None,
+        nano_request_id=nano_result["request_id"],
+        original_prompt=prompt,
+        gcs_url=gcs_url,
+    )
+
+
+@app.post("/api/symphony/generate", response_model=SymphonyGenerateResponse, status_code=202)
+async def symphony_generate(payload: SymphonyGenerateRequest):
+    """
+    Step 5 of Symphony: Generate the final video.
+
+    Routes to:
+      - Runway Gen-4.5 image-to-video  if payload.model == "runway"
+      - Google Veo 3.1 image-to-video  if payload.model == "veo"
+
+    The model value is NEVER overridden — what you send is what runs.
+    """
+    # ── Log model choice immediately so we can prove routing ─────────────────
+    logger.info(
+        f">>> SYMPHONY GENERATE | model={payload.model!r} | "
+        f"avatar_id={payload.avatar_id} | prompt={payload.prompt[:60]}…"
+    )
+
+    # ── Resolve avatar (optional) ─────────────────────────────────────────────
+    avatar: Optional[dict] = None
+    if payload.avatar_id:
+        avatar = await get_avatar(payload.avatar_id)
+        if not avatar:
+            raise HTTPException(status_code=404, detail="Avatar not found")
+
+    # ── Optionally enhance prompt with Gemini ─────────────────────────────────
+    final_prompt = payload.prompt
+    if payload.enhance_prompt:
+        try:
+            final_prompt = await enhance_prompt(
+                user_prompt=payload.prompt,
+                brand_instructions="",
+            )
+        except Exception as e:
+            logger.warning(f"Prompt enhancement failed (using raw): {e}")
+
+    # ── Create video record ───────────────────────────────────────────────────
+    video = await create_symphony_video(
+        user_prompt=payload.prompt,
+        model_used=payload.model,
+        nano_reference_url=payload.edited_image_url,
+        brand_id=payload.brand_id,
+        enhanced_prompt=final_prompt,
+    )
+    video_id = video["id"]
+
+    # ── Aspect ratio → Runway ratio string ────────────────────────────────────
+    _ratio_map = {
+        "16:9": "1280:720",
+        "9:16": "720:1280",
+        "1:1":  "1024:1024",
+        "4:3":  "1280:960",
+    }
+    runway_ratio = _ratio_map.get(payload.aspect_ratio, "720:1280")
+
+    try:
+        if payload.model == "runway":
+            # ── Runway Gen-4.5 image-to-video ─────────────────────────────────
+            if not settings.RUNWAYML_API_SECRET:
+                await update_video_failed(video_id, "RUNWAYML_API_SECRET not configured")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Runway is not configured. Add RUNWAYML_API_SECRET to your .env.",
+                )
+
+            from .runway_client import get_runway_client
+            import asyncio as _asyncio
+
+            # Use avatar's custom_model_id if trained; otherwise standard gen4_5
+            runway_model = "gen4_5"
+            if avatar and avatar.get("custom_model_id"):
+                runway_model = avatar["custom_model_id"]
+                logger.info(
+                    f"Symphony Runway: using custom_model_id={runway_model} "
+                    f"from avatar {payload.avatar_id}"
+                )
+            else:
+                logger.info("Symphony Runway: using standard gen4_5 model")
+
+            client = get_runway_client()
+
+            def _submit_runway():
+                return client.image_to_video.create(
+                    model=runway_model,
+                    prompt_text=final_prompt,
+                    prompt_image=payload.edited_image_url,
+                    duration=payload.duration,
+                    ratio=runway_ratio,
+                )
+
+            task = await _asyncio.to_thread(_submit_runway)
+            operation_name = f"runway:{task.id}"
+            logger.info(
+                f"Symphony Runway task started | task_id={task.id} | "
+                f"model={runway_model} | video_id={video_id}"
+            )
+
+        elif payload.model == "veo":
+            # ── Google Veo 3.1 image-to-video ─────────────────────────────────
+            veo_api_key = settings.GEMINI_VEO_API_KEY or settings.GOOGLE_API_KEY
+            if not veo_api_key:
+                await update_video_failed(video_id, "No Google API key configured")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Google API key not configured. Add GEMINI_VEO_API_KEY to .env.",
+                )
+
+            from google import genai as _genai
+            from google.genai import types as _genai_types
+
+            veo_client = _genai.Client(api_key=veo_api_key)
+            veo_model = "veo-3.1-generate-preview"
+
+            video_config = _genai_types.GenerateVideosConfig(
+                aspect_ratio=payload.aspect_ratio,
+                number_of_videos=1,
+                duration_seconds=payload.duration,
+            )
+
+            # Use the Nano-edited image as the conditioning start frame
+            image_param = _genai_types.Image(url=payload.edited_image_url)
+
+            operation = veo_client.models.generate_videos(
+                model=veo_model,
+                prompt=final_prompt,
+                image=image_param,
+                config=video_config,
+            )
+            operation_name = operation.name
+            logger.info(
+                f"Symphony Veo operation started | op={operation_name} | "
+                f"model={veo_model} | video_id={video_id}"
+            )
+
+        else:
+            await update_video_failed(video_id, f"Unknown model: {payload.model!r}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model {payload.model!r}. Must be 'runway' or 'veo'.",
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        await update_video_failed(video_id, str(e))
+        logger.error(
+            f"Symphony generation failed | model={payload.model} | "
+            f"video_id={video_id} | error={e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"{payload.model.capitalize()} API error: {e}",
+        )
+
+    # ── Persist the operation name so the worker can poll it ──────────────────
+    await update_symphony_job_id(video_id, operation_name)
+    # Also update operation_id so the existing worker picks it up automatically
+    await update_video_operation(video_id, operation_name)
+
+    estimated = 90 if payload.model == "runway" else 150
+
+    return SymphonyGenerateResponse(
+        job_id=video_id,
+        status=VideoStatus.PROCESSING,
+        message=f"Symphony video started via {payload.model.capitalize()} Gen-4.5/Veo 3.1.",
+        model_used=payload.model,
+        estimated_seconds=estimated,
+    )
+
+
+@app.get("/api/symphony/status/{job_id}", response_model=SymphonyJobStatusResponse)
+async def symphony_status(job_id: str):
+    """
+    Poll the status of a Symphony video generation job (every 3s from frontend).
+    Maps to the videos table row created by /api/symphony/generate.
+    """
+    video = await get_symphony_video(job_id)
+    if not video:
+        raise HTTPException(status_code=404, detail=f"Symphony job {job_id!r} not found")
+
+    status = VideoStatus(video.get("status", "PENDING"))
+
+    # Estimate progress based on status
+    progress_map = {
+        VideoStatus.PENDING:    10,
+        VideoStatus.PROCESSING: 55,
+        VideoStatus.COMPLETED:  100,
+        VideoStatus.FAILED:     0,
+    }
+
+    return SymphonyJobStatusResponse(
+        job_id=job_id,
+        status=status,
+        video_url=video.get("video_url"),
+        nano_reference_url=video.get("nano_reference_url"),
+        model_used=video.get("model_used"),
+        error_message=video.get("error_message"),
+        progress=progress_map.get(status, 50),
+        created_at=video.get("created_at"),
+        updated_at=video.get("updated_at"),
+    )

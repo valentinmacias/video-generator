@@ -19,6 +19,13 @@ class Settings(BaseSettings):
         ),
     )
 
+    # Nano Banana AI image editing (Symphony flow: face / ethnicity / clothes swap)
+    NANO_BANANA_API_KEY: Optional[str] = None
+
+    # Gemini Veo API key — defaults to GOOGLE_API_KEY if not set separately
+    # Set this to a dedicated Veo key for quota isolation.
+    GEMINI_VEO_API_KEY: Optional[str] = None
+
     # Kling AI (legacy fallback)
     KLING_ACCESS_KEY: Optional[str] = None
     KLING_SECRET_KEY: Optional[str] = None

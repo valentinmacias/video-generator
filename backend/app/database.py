@@ -227,3 +227,55 @@ async def get_training_avatars() -> List[Dict[str, Any]]:
         .execute()
     )
     return result.data
+
+
+# ── Symphony Video Creator operations ─────────────────────────────────────────
+
+async def create_symphony_video(
+    user_prompt: str,
+    model_used: str,
+    nano_reference_url: Optional[str] = None,
+    brand_id: Optional[str] = None,
+    enhanced_prompt: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Create a video record with symphony-specific fields."""
+    db = get_supabase()
+    result = db.table("videos").insert({
+        "brand_id":            brand_id,
+        "user_prompt":         user_prompt,
+        "enhanced_prompt":     enhanced_prompt or user_prompt,
+        "status":              VideoStatus.PENDING.value,
+        "model_used":          model_used,
+        "nano_reference_url":  nano_reference_url,
+    }).execute()
+    return result.data[0]
+
+
+async def update_symphony_job_id(video_id: str, symphony_job_id: str) -> None:
+    """Store the external provider job ID on the video record."""
+    db = get_supabase()
+    db.table("videos").update({
+        "symphony_job_id": symphony_job_id,
+        "status":          VideoStatus.PROCESSING.value,
+        "updated_at":      datetime.now(timezone.utc).isoformat(),
+    }).eq("id", video_id).execute()
+
+
+async def get_symphony_video(video_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a symphony video record with all extended fields."""
+    db = get_supabase()
+    result = db.table("videos").select(
+        "id, status, video_url, nano_reference_url, model_used, "
+        "symphony_job_id, error_message, user_prompt, created_at, updated_at"
+    ).eq("id", video_id).execute()
+    return result.data[0] if result.data else None
+
+
+async def update_avatar_nano_reference(avatar_id: str, nano_image_url: str) -> None:
+    """Store the Nano Banana reference image on an avatar record."""
+    db = get_supabase()
+    db.table("avatars").update({
+        "nano_reference_image": nano_image_url,
+        "updated_at":           datetime.now(timezone.utc).isoformat(),
+    }).eq("id", avatar_id).execute()
+    logger.info(f"Avatar {avatar_id}: nano_reference_image updated")

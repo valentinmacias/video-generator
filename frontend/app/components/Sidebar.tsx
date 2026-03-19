@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Film, Users, Library, Sparkles, ChevronRight } from "lucide-react";
+import { Film, Users, Library, Sparkles, ChevronRight, Clapperboard } from "lucide-react";
 import { clsx } from "clsx";
 
 const NAV_ITEMS = [
@@ -12,6 +12,13 @@ const NAV_ITEMS = [
     icon: Film,
     label: "Video Generation",
     description: "Create AI videos",
+  },
+  {
+    href: "/symphony",
+    icon: Clapperboard,
+    label: "Symphony Create",
+    description: "UGC → Nano → Animate",
+    badge: "NEW",
   },
   {
     href: "/avatars",
@@ -63,7 +70,10 @@ export function Sidebar() {
                   "sidebar-link group relative flex items-center gap-3 rounded-xl px-3 py-3 text-sm transition-all duration-200",
                   active
                     ? "active bg-tt-card text-tt-text"
-                    : "text-tt-muted hover:bg-tt-hover hover:text-tt-text"
+                    : "text-tt-muted hover:bg-tt-hover hover:text-tt-text",
+                  item.href === "/symphony" && !active
+                    ? "border border-tt-purple/20 bg-tt-purple/5 hover:border-tt-purple/40"
+                    : ""
                 )}
               >
                 <div
@@ -71,13 +81,28 @@ export function Sidebar() {
                     "flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-all duration-200",
                     active
                       ? "bg-gradient-to-br from-tt-accent/20 to-tt-blue/20 text-tt-accent"
+                      : item.href === "/symphony"
+                      ? "bg-gradient-to-br from-tt-purple/20 to-tt-blue/20 text-tt-purple group-hover:from-tt-purple/30"
                       : "bg-tt-border/50 text-tt-muted group-hover:bg-tt-border group-hover:text-tt-text"
                   )}
                 >
                   <Icon size={16} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className={clsx("font-medium leading-tight", active ? "text-tt-text" : "")}>{item.label}</p>
+                  <div className="flex items-center gap-2">
+                    <p className={clsx(
+                      "font-medium leading-tight",
+                      active ? "text-tt-text" : "",
+                      item.href === "/symphony" && !active ? "text-tt-purple" : "",
+                    )}>
+                      {item.label}
+                    </p>
+                    {"badge" in item && item.badge && (
+                      <span className="rounded-full bg-tt-purple/20 border border-tt-purple/30 px-1.5 py-0.5 text-[9px] font-black text-tt-purple uppercase tracking-wider">
+                        {item.badge}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[11px] leading-tight text-tt-muted">{item.description}</p>
                 </div>
                 {active && (
@@ -99,7 +124,7 @@ export function Sidebar() {
           <span className="text-xs font-semibold text-tt-accent">AI Powered</span>
         </div>
         <p className="text-[11px] leading-relaxed text-tt-muted">
-          Runway Gen-4 Turbo · Gemini · Imagen
+          Runway · Veo · Nano Banana · Gemini
         </p>
         <button className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg bg-tt-accent/10 px-3 py-2 text-[11px] font-semibold text-tt-accent hover:bg-tt-accent/20 transition-colors">
           View Docs <ChevronRight size={12} />

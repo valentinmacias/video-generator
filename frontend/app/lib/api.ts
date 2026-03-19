@@ -430,3 +430,98 @@ export async function fileToBase64(file: File): Promise<string> {
     reader.readAsDataURL(file);
   });
 }
+
+// ── Symphony Video Creator types ─────────────────────────────────────────────────
+
+/** Result from POST /api/symphony/nano-edit */
+export interface NanoEditResult {
+  edited_image_url:  string | null;
+  edited_image_b64:  string | null;
+  nano_request_id:   string;
+  original_prompt:   string;
+  gcs_url:           string | null;
+}
+
+/** POST /api/symphony/generate request body */
+export interface SymphonyGeneratePayload {
+  edited_image_url:   string;
+  /** MUST be exactly "runway" or "veo" — never silently overridden */
+  model:              "runway" | "veo";
+  prompt:             string;
+  avatar_id?:         string | null;
+  original_video_key?: string | null;
+  brand_id?:          string | null;
+  aspect_ratio?:      string;
+  duration?:          5 | 10;
+  enhance_prompt?:    boolean;
+}
+
+/** Returned by POST /api/symphony/generate */
+export interface SymphonyGenerateResult {
+  job_id:            string;
+  status:            VideoStatus;
+  message:           string;
+  model_used:        string;
+  estimated_seconds: number;
+}
+
+/** Returned by GET /api/symphony/status/:jobId */
+export interface SymphonyJobStatus {
+  job_id:             string;
+  status:             VideoStatus;
+  video_url:          string | null;
+  nano_reference_url: string | null;
+  model_used:         string | null;
+  error_message:      string | null;
+  progress:           number;
+  created_at:         string | null;
+  updated_at:         string | null;
+}
+
+// ── Symphony API functions ────────────────────────────────────────────────────────
+
+/**
+ * Step 2 of Symphony: upload a source image + swap prompt → Nano Banana edited image.
+ * Uses multipart/form-data — do NOT set Content-Type header manually.
+ */
+export async function symphonyNanoEdit(
+  imageFile: File,
+  prompt:    string,
+  avatarId?: string,
+): Promise<NanoEditResult> {
+  const form = new FormData();
+  form.append("image",  imageFile);
+  form.append("prompt", prompt);
+  if (avatarId) form.append("avatar_id", avatarId);
+
+  const res = await fetch(`${API_BASE}/api/symphony/nano-edit`, {
+    method: "POST",
+    body:   form,
+    // Do NOT set Content-Type — browser sets multipart boundary automatically
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail ?? `nano-edit error ${res.status}`);
+  }
+  return res.json() as Promise<NanoEditResult>;
+}
+
+/**
+ * Step 5 of Symphony: submit the generation request.
+ * The `model` field is sent exactly as provided — Runway or Veo, never overridden.
+ */
+export async function symphonyGenerate(
+  payload: SymphonyGeneratePayload,
+): Promise<SymphonyGenerateResult> {
+  return apiFetch<SymphonyGenerateResult>("/api/symphony/generate", {
+    method: "POST",
+    body:   JSON.stringify(payload),
+  });
+}
+
+/**
+ * Poll the status of a Symphony job (call every 3 seconds until COMPLETED/FAILED).
+ */
+export async function symphonyStatus(jobId: string): Promise<SymphonyJobStatus> {
+  return apiFetch<SymphonyJobStatus>(`/api/symphony/status/${jobId}`);
+}
