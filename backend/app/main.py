@@ -496,12 +496,6 @@ async def symphony_nano_edit(
     - Optionally saves the result URL on an avatar record.
     - Returns the edited image URL for the before/after preview.
     """
-    if not settings.NANO_BANANA_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="NANO_BANANA_API_KEY is not configured. Add it to your .env file.",
-        )
-
     allowed_types = {"image/jpeg", "image/png", "image/webp"}
     if image.content_type not in allowed_types:
         raise HTTPException(
