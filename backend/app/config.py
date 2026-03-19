@@ -19,7 +19,7 @@ class Settings(BaseSettings):
         ),
     )
 
-    # Nano Banana AI image editing (Symphony flow: face / ethnicity / clothes swap)
+    # Legacy — no longer used (image editing now via Google Imagen 3)
     NANO_BANANA_API_KEY: Optional[str] = None
 
     # Gemini Veo API key — defaults to GOOGLE_API_KEY if not set separately
