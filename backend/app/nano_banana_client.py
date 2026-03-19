@@ -14,7 +14,7 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "gemini-2.0-flash-exp-image-generation"
+_MODEL = "gemini-2.0-flash-preview-image-generation"
 
 
 def _client() -> genai.Client:
