@@ -480,19 +480,40 @@ export interface SymphonyJobStatus {
 
 // ── Symphony API functions ────────────────────────────────────────────────────────
 
+export interface NanoEditOptions {
+  avatarId?:      string;
+  imageStrength?: number;   // 0.1–0.35
+  guidanceScale?: number;   // 3–7
+  seed?:          number | null;
+}
+
 /**
- * Step 2 of Symphony: upload a source image + swap prompt → Nano Banana edited image.
+ * Step 2 of Symphony — two modes:
+ *
+ *   MODE A (generate): imageFiles is null / empty → prompt-only generation.
+ *   MODE B (edit):     imageFiles provided → person segmentation + inpainting.
+ *
  * Uses multipart/form-data — do NOT set Content-Type header manually.
+ * Mode is determined server-side based on presence of source_images.
  */
 export async function symphonyNanoEdit(
-  imageFile: File,
-  prompt:    string,
-  avatarId?: string,
+  imageFiles: File[] | null,
+  prompt:     string,
+  options:    NanoEditOptions = {},
 ): Promise<NanoEditResult> {
   const form = new FormData();
-  form.append("image",  imageFile);
+
+  // MODE B: append each image under the "source_images" field
+  if (imageFiles && imageFiles.length > 0) {
+    imageFiles.forEach((f) => form.append("source_images", f));
+  }
+  // MODE A: no images appended → backend sees empty list → generate mode
+
   form.append("prompt", prompt);
-  if (avatarId) form.append("avatar_id", avatarId);
+  if (options.avatarId)                              form.append("avatar_id",      options.avatarId);
+  if (options.imageStrength !== undefined)           form.append("image_strength", String(options.imageStrength));
+  if (options.guidanceScale !== undefined)           form.append("guidance_scale", String(options.guidanceScale));
+  if (options.seed != null)                          form.append("seed",           String(options.seed));
 
   const res = await fetch(`${API_BASE}/api/symphony/nano-edit`, {
     method: "POST",

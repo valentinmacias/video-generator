@@ -185,11 +185,14 @@ export function SymphonyCreator() {
   const [sourcePreview, setSourcePreview] = useState<string | null>(null);
   const [avatarId, setAvatarId]       = useState<string | null>(null);
 
-  // Step 2 — swap prompt
-  const [swapPrompt, setSwapPrompt]   = useState("");
-  const [nanoLoading, setNanoLoading] = useState(false);
-  const [nanoError, setNanoError]     = useState<string | null>(null);
-  const [nanoResult, setNanoResult]   = useState<NanoEditResult | null>(null);
+  // Step 2 — swap prompt + edit parameters
+  const [swapPrompt, setSwapPrompt]     = useState("");
+  const [nanoLoading, setNanoLoading]   = useState(false);
+  const [nanoError, setNanoError]       = useState<string | null>(null);
+  const [nanoResult, setNanoResult]     = useState<NanoEditResult | null>(null);
+  const [imageStrength, setImageStrength] = useState(0.22);
+  const [guidanceScale, setGuidanceScale] = useState(4.5);
+  const [editSeed, setEditSeed]           = useState<string>("");  // "" = no seed
 
   // Step 4 — generation settings
   const [settings, setSettings]       = useState<Settings>(DEFAULT_SETTINGS);
@@ -212,11 +215,21 @@ export function SymphonyCreator() {
   }
 
   async function handleNanoEdit() {
-    if (!sourceFile || !swapPrompt.trim()) return;
+    if (!swapPrompt.trim()) return;
     setNanoLoading(true);
     setNanoError(null);
     try {
-      const result = await symphonyNanoEdit(sourceFile, swapPrompt.trim(), avatarId ?? undefined);
+      const seedNum = editSeed.trim() !== "" ? parseInt(editSeed, 10) : null;
+      const result = await symphonyNanoEdit(
+        sourceFile ? [sourceFile] : null,   // null → MODE A (generate)
+        swapPrompt.trim(),
+        {
+          avatarId:      avatarId ?? undefined,
+          imageStrength,
+          guidanceScale,
+          seed:          Number.isFinite(seedNum) ? seedNum : null,
+        },
+      );
       setNanoResult(result);
       setStep(3);
     } catch (e) {
@@ -276,6 +289,9 @@ export function SymphonyCreator() {
     setSwapPrompt("");
     setNanoResult(null);
     setNanoError(null);
+    setImageStrength(0.22);
+    setGuidanceScale(4.5);
+    setEditSeed("");
     setSettings(DEFAULT_SETTINGS);
     setJobId(null);
     setJobStatus(null);
@@ -348,41 +364,127 @@ export function SymphonyCreator() {
                 <AvatarPicker selected={avatarId} onSelect={setAvatarId} />
               </div>
 
+              {!sourceFile && (
+                <p className="text-xs text-tt-muted text-center">
+                  No image? That&apos;s fine — you&apos;ll generate a new one from your prompt.
+                </p>
+              )}
               <button
                 onClick={() => setStep(2)}
-                disabled={!sourceFile}
-                className="btn-accent flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold disabled:opacity-40"
+                className="btn-accent flex w-full items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold"
               >
                 Continue <ChevronRight size={16} />
               </button>
             </motion.div>
           )}
 
-          {/* STEP 2 — Swap prompt */}
+          {/* STEP 2 — Swap / generate prompt */}
           {step === 2 && (
             <motion.div key="step2" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} className="mx-auto max-w-xl space-y-6">
+
+              {/* Mode badge + source image preview */}
               <div className="rounded-2xl border border-tt-border bg-tt-card overflow-hidden">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                {sourcePreview && <img src={sourcePreview} alt="Source" className="w-full object-cover max-h-48" />}
-                <div className="p-4">
-                  <p className="text-xs font-bold uppercase tracking-wider text-tt-muted">Source image</p>
-                  <p className="mt-0.5 text-sm text-tt-text truncate">{sourceFile?.name}</p>
+                {sourcePreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={sourcePreview} alt="Source" className="w-full object-cover max-h-48" />
+                ) : (
+                  <div className="flex h-24 items-center justify-center bg-tt-surface">
+                    <ImageIcon size={28} className="text-tt-muted" />
+                  </div>
+                )}
+                <div className="flex items-center justify-between p-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-tt-muted">
+                      {sourceFile ? "Source image" : "No image — generate mode"}
+                    </p>
+                    <p className="mt-0.5 text-sm text-tt-text truncate">
+                      {sourceFile?.name ?? "New image will be generated from your prompt"}
+                    </p>
+                  </div>
+                  <span className={clsx(
+                    "rounded-lg px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider",
+                    sourceFile
+                      ? "bg-tt-accent/15 text-tt-accent"
+                      : "bg-purple-500/15 text-purple-400"
+                  )}>
+                    {sourceFile ? "Edit" : "Generate"}
+                  </span>
                 </div>
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-bold text-tt-text">Brand swap prompt</label>
+                <label className="mb-1 block text-sm font-bold text-tt-text">
+                  {sourceFile ? "Brand swap prompt" : "Generation prompt"}
+                </label>
                 <p className="mb-3 text-xs text-tt-muted">
-                  Describe what to change — e.g. <em>"Replace the white t-shirt with a Nike dri-fit in coral red"</em>
+                  {sourceFile
+                    ? <>Describe what to change — e.g. <em>&quot;Replace the white t-shirt with a Nike dri-fit in coral red&quot;</em></>
+                    : "Describe the image you want to create from scratch."}
                 </p>
                 <textarea
                   value={swapPrompt}
                   onChange={(e) => setSwapPrompt(e.target.value)}
-                  placeholder="Replace the plain t-shirt with a branded hoodie in midnight blue with the Acme logo on the chest…"
+                  placeholder={sourceFile
+                    ? "Replace the plain t-shirt with a branded hoodie in midnight blue with the Acme logo on the chest…"
+                    : "Black american man, 55 yrs old, holding a product near a pool, photoreal UGC iPhone style…"}
                   rows={4}
                   className="w-full resize-none rounded-xl border border-tt-border bg-tt-surface px-4 py-3 text-sm text-tt-text placeholder-tt-muted focus:border-tt-accent/50 focus:outline-none focus:ring-1 focus:ring-tt-accent/30 transition-all"
                 />
               </div>
+
+              {/* Edit parameters — only shown in edit mode */}
+              {sourceFile && (
+                <div className="rounded-xl border border-tt-border bg-tt-card p-4 space-y-4">
+                  <p className="text-xs font-bold uppercase tracking-wider text-tt-muted">Edit parameters</p>
+
+                  {/* image_strength */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-tt-text">Edit intensity</label>
+                      <span className="text-xs font-mono text-tt-accent">{imageStrength.toFixed(2)}</span>
+                    </div>
+                    <input
+                      type="range" min={0.10} max={0.35} step={0.01}
+                      value={imageStrength}
+                      onChange={(e) => setImageStrength(parseFloat(e.target.value))}
+                      className="w-full accent-tt-accent"
+                    />
+                    <div className="flex justify-between text-[10px] text-tt-muted mt-0.5">
+                      <span>Subtle (0.10)</span><span>Strong (0.35)</span>
+                    </div>
+                  </div>
+
+                  {/* guidance_scale */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-semibold text-tt-text">Prompt adherence</label>
+                      <span className="text-xs font-mono text-tt-accent">{guidanceScale.toFixed(1)}</span>
+                    </div>
+                    <input
+                      type="range" min={3} max={7} step={0.1}
+                      value={guidanceScale}
+                      onChange={(e) => setGuidanceScale(parseFloat(e.target.value))}
+                      className="w-full accent-tt-accent"
+                    />
+                    <div className="flex justify-between text-[10px] text-tt-muted mt-0.5">
+                      <span>Creative (3)</span><span>Strict (7)</span>
+                    </div>
+                  </div>
+
+                  {/* seed */}
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold text-tt-text">
+                      Seed <span className="font-normal text-tt-muted">(optional — leave blank for random)</span>
+                    </label>
+                    <input
+                      type="number" min={0} placeholder="e.g. 42"
+                      value={editSeed}
+                      onChange={(e) => setEditSeed(e.target.value)}
+                      className="w-full rounded-xl border border-tt-border bg-tt-surface px-3 py-2 text-sm text-tt-text placeholder-tt-muted focus:border-tt-accent/50 focus:outline-none focus:ring-1 focus:ring-tt-accent/30 transition-all"
+                    />
+                  </div>
+                </div>
+              )}
 
               {nanoError && (
                 <div className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
@@ -404,38 +506,45 @@ export function SymphonyCreator() {
                   className="btn-accent flex flex-1 items-center justify-center gap-2 rounded-xl py-3 text-sm font-bold disabled:opacity-40"
                 >
                   {nanoLoading ? (
-                    <><Loader2 size={16} className="animate-spin" /> Applying swap…</>
+                    <><Loader2 size={16} className="animate-spin" /> {sourceFile ? "Applying swap…" : "Generating…"}</>
                   ) : (
-                    <><Sparkles size={16} /> Apply Brand Swap</>
+                    <><Sparkles size={16} /> {sourceFile ? "Apply Brand Swap" : "Generate Image"}</>
                   )}
                 </button>
               </div>
             </motion.div>
           )}
 
-          {/* STEP 3 — Preview nano result */}
+          {/* STEP 3 — Preview result */}
           {step === 3 && nanoResult && (
             <motion.div key="step3" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }} className="mx-auto max-w-2xl space-y-6">
-              <p className="text-sm font-bold text-tt-text">Brand swap preview</p>
+              <p className="text-sm font-bold text-tt-text">
+                {sourceFile ? "Brand swap preview" : "Generated image"}
+              </p>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Original</p>
-                  <div className="overflow-hidden rounded-2xl border border-tt-border aspect-video bg-tt-card">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {sourcePreview && <img src={sourcePreview} alt="Original" className="h-full w-full object-cover" />}
+              <div className={clsx("gap-4", sourceFile ? "grid grid-cols-2" : "flex justify-center")}>
+                {/* Original — edit mode only */}
+                {sourceFile && (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold text-tt-muted uppercase tracking-wider">Original</p>
+                    <div className="overflow-hidden rounded-2xl border border-tt-border aspect-video bg-tt-card">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      {sourcePreview && <img src={sourcePreview} alt="Original" className="h-full w-full object-cover" />}
+                    </div>
                   </div>
-                </div>
-                <div className="space-y-2">
+                )}
+
+                {/* Result image — both modes */}
+                <div className={clsx("space-y-2", !sourceFile && "w-full max-w-lg")}>
                   <p className="text-xs font-semibold text-tt-accent uppercase tracking-wider flex items-center gap-1">
-                    <Sparkles size={11} /> After Nano Banana swap
+                    <Sparkles size={11} /> {sourceFile ? "After swap" : "Generated"}
                   </p>
                   <div className="overflow-hidden rounded-2xl border border-tt-accent/40 aspect-video bg-tt-card">
                     {(nanoResult.edited_image_url ?? nanoResult.gcs_url) ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={nanoResult.edited_image_url ?? nanoResult.gcs_url ?? ""}
-                        alt="Swapped"
+                        alt={sourceFile ? "Swapped" : "Generated"}
                         className="h-full w-full object-cover"
                       />
                     ) : (
@@ -448,7 +557,7 @@ export function SymphonyCreator() {
               </div>
 
               <div className="rounded-xl border border-tt-border bg-tt-card p-4">
-                <p className="text-xs font-bold uppercase tracking-wider text-tt-muted mb-1">Swap prompt used</p>
+                <p className="text-xs font-bold uppercase tracking-wider text-tt-muted mb-1">Prompt used</p>
                 <p className="text-sm text-tt-text">{nanoResult.original_prompt}</p>
               </div>
 
@@ -457,7 +566,7 @@ export function SymphonyCreator() {
                   onClick={() => { setNanoResult(null); setStep(2); }}
                   className="flex items-center gap-2 rounded-xl border border-tt-border bg-tt-card px-5 py-3 text-sm font-semibold text-tt-muted hover:text-tt-text transition-all"
                 >
-                  <RefreshCw size={15} /> Re-swap
+                  <RefreshCw size={15} /> {sourceFile ? "Re-swap" : "Re-generate"}
                 </button>
                 <button
                   onClick={() => setStep(4)}

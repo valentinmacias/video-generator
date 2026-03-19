@@ -25,7 +25,7 @@ from .database import (
     create_symphony_video, update_symphony_job_id,
     get_symphony_video, update_avatar_nano_reference,
 )
-from .nano_banana_client import nano_edit_image, download_nano_result
+from .nano_banana_client import run_edit_pipeline, run_generation_pipeline, download_nano_result
 from .ai import PipelineError
 from .ai.auth import initialize_vertex_ai
 from .gemini_client import enhance_prompt
@@ -497,94 +497,115 @@ async def list_videos_endpoint(brand_id: Optional[str] = None, limit: int = 20):
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Symphony Video Creator endpoints
-# Flow: Upload UGC → Nano Banana edit → Avatar select → Model select → Generate
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.post("/api/symphony/nano-edit", response_model=NanoEditResponse)
 async def symphony_nano_edit(
-    image: UploadFile = File(..., description="Source image/keyframe (JPEG/PNG/WebP, max 10MB)"),
-    prompt: str = Form(..., description="Edit instruction, e.g. 'Change to Latina woman in red hoodie'"),
-    avatar_id: Optional[str] = Form(None, description="If provided, store result on this avatar"),
-    image_strength: float = Form(0.22, description="Edit intensity 0.1–0.35 (default 0.22)"),
-    guidance_scale: float = Form(4.5, description="Prompt adherence 3–7 (default 4.5)"),
-    seed: Optional[int] = Form(None, description="Deterministic seed for reproducible results"),
+    # source_images is optional — its presence determines the mode:
+    #   images provided  → MODE B: identity-preserving inpainting edit
+    #   no images        → MODE A: text-to-image generation from scratch
+    source_images: List[UploadFile] = File(default=[]),
+    prompt: str = Form(..., description="Edit / generation instruction"),
+    avatar_id: Optional[str] = Form(None, description="Store result on this avatar"),
+    image_strength: float = Form(0.22, description="Edit intensity 0.1–0.35"),
+    guidance_scale: float = Form(4.5,  description="Prompt adherence 3–7"),
+    seed: Optional[int] = Form(None,   description="Deterministic seed (optional)"),
 ):
     """
-    Step 2 of Symphony: Nano Banana face / ethnicity / clothes swap.
+    Step 2 of Symphony — two explicit modes:
 
-    - Accepts a single image and a natural-language swap prompt.
-    - Calls the Nano Banana edit API.
-    - Uploads the result to GCS for durable storage.
-    - Optionally saves the result URL on an avatar record.
-    - Returns the edited image URL for the before/after preview.
+    MODE A (generate): no source_images → generate new image from prompt.
+    MODE B (edit):     source_images provided → segment person → inpaint.
+
+    Routing is decided HERE, not inside nano_banana_client.
     """
-    allowed_types = {"image/jpeg", "image/png", "image/webp"}
-    if image.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported image type: {image.content_type}. Use JPEG, PNG or WebP.",
-        )
+    import base64 as _b64  # noqa: PLC0415
+    import uuid   as _uuid  # noqa: PLC0415
 
-    image_bytes = await image.read()
-    if len(image_bytes) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Image exceeds the 10MB limit.")
+    # ── Mode determination ─────────────────────────────────────────────────────
+    mode = "edit" if source_images else "generate"
+    logger.info(
+        "SYMPHONY_MODE=%s | images=%d | strength=%.2f | guidance=%.1f | "
+        "seed=%s | prompt=%.80s",
+        mode, len(source_images), image_strength, guidance_scale, seed, prompt,
+    )
 
-    # ── Call Nano Banana ───────────────────────────────────────────────────────
+    # ── Route to the correct pipeline ─────────────────────────────────────────
     try:
-        nano_result = await nano_edit_image(
-            image_bytes=image_bytes,
-            prompt=prompt,
-            image_content_type=image.content_type or "image/jpeg",
-            image_strength=image_strength,
-            guidance_scale=guidance_scale,
-            seed=seed,
-        )
+        if mode == "edit":
+            # Validate and read the first (primary) image
+            first = source_images[0]
+            allowed_types = {"image/jpeg", "image/png", "image/webp"}
+            if first.content_type not in allowed_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported image type: {first.content_type}. Use JPEG, PNG or WebP.",
+                )
+            image_bytes = await first.read()
+            if len(image_bytes) > 10 * 1024 * 1024:
+                raise HTTPException(status_code=413, detail="Image exceeds the 10MB limit.")
+
+            nano_result = await run_edit_pipeline(
+                image_bytes=image_bytes,
+                prompt=prompt,
+                image_content_type=first.content_type or "image/jpeg",
+                image_strength=image_strength,
+                guidance_scale=guidance_scale,
+                seed=seed,
+            )
+        else:
+            # MODE A — no source image, generate from prompt
+            nano_result = await run_generation_pipeline(
+                prompt=prompt,
+                guidance_scale=guidance_scale,
+                seed=seed,
+            )
+
     except PipelineError as e:
-        logger.error("Pipeline error during nano-edit [%s]: %s", e.error_type.value, e.message)
-        status = 503 if e.error_type.value in ("AUTH_ERROR", "QUOTA_ERROR") else 502
-        raise HTTPException(status_code=status, detail=e.to_dict())
+        logger.error("Pipeline error [%s]: %s", e.error_type.value, e.message)
+        http_status = 503 if e.error_type.value in ("AUTH_ERROR", "QUOTA_ERROR") else 502
+        raise HTTPException(status_code=http_status, detail=e.to_dict())
+    except HTTPException:
+        raise
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
     # ── Upload result to GCS for durable storage ──────────────────────────────
     gcs_url: Optional[str] = None
-    edited_url = nano_result.get("edited_image_url")
-    edited_b64 = nano_result.get("edited_image_b64")
+    edited_url  = nano_result.get("edited_image_url")
+    edited_b64  = nano_result.get("edited_image_b64")
 
     try:
         result_bytes: Optional[bytes] = None
         if edited_url:
             result_bytes = await download_nano_result(edited_url)
         elif edited_b64:
-            import base64 as _b64
             result_bytes = _b64.b64decode(edited_b64)
 
         if result_bytes:
-            import uuid as _uuid
             gcs_uri = upload_file(
                 file_bytes=result_bytes,
                 content_type="image/jpeg",
                 folder="symphony/nano_edits",
                 filename=f"{_uuid.uuid4()}.jpg",
             )
-            # Convert gs:// → signed HTTPS for frontend display
             blob_name = gcs_uri.replace(f"gs://{settings.GCS_BUCKET_NAME}/", "")
             gcs_url = generate_signed_url(blob_name, expiration_minutes=60 * 24 * 7)
     except Exception as e:
-        logger.warning(f"GCS upload of Nano Banana result failed (non-fatal): {e}")
+        logger.warning("GCS upload failed (non-fatal): %s", e)
 
-    final_url = gcs_url or edited_url  # prefer our GCS copy
+    final_url = gcs_url or edited_url
 
     # ── Optionally persist on the avatar record ────────────────────────────────
     if avatar_id and final_url:
         try:
             await update_avatar_nano_reference(avatar_id, final_url)
         except Exception as e:
-            logger.warning(f"Could not update avatar nano_reference_image: {e}")
+            logger.warning("Could not update avatar nano_reference_image: %s", e)
 
     logger.info(
-        f"Symphony nano-edit complete | nano_id={nano_result['request_id']} | "
-        f"gcs={bool(gcs_url)} | avatar={avatar_id}"
+        "Symphony %s complete | req=%s | gcs=%s | avatar=%s",
+        mode, nano_result["request_id"], bool(gcs_url), avatar_id,
     )
 
     return NanoEditResponse(
