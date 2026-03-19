@@ -1,26 +1,58 @@
 """
-Image editing client — Google Imagen 3 (Symphony Video Creator flow)
-────────────────────────────────────────────────────────────────────
-Uses the google-genai SDK with GOOGLE_API_KEY (already configured).
-Handles face / ethnicity / clothes swap via Imagen 3's edit_image API.
+Image editing client — Google Imagen 3 via Vertex AI (Symphony Video Creator flow)
+────────────────────────────────────────────────────────────────────────────────────
+edit_image is only available on the Vertex AI client; the standard API-key client
+does not support it.  We reuse the same service-account credentials that are
+already used for GCS.
 """
 import base64
+import json
 import logging
 from typing import Optional
 
 from google import genai
 from google.genai import types
+from google.oauth2 import service_account
 
 from .config import settings
 
 logger = logging.getLogger(__name__)
 
-# Imagen 3 editing model
+# Imagen 3 editing model (same name on Vertex AI)
 _IMAGEN_EDIT_MODEL = "imagen-3.0-capability-001"
+_VERTEX_LOCATION   = "us-central1"
 
 
-def _client() -> genai.Client:
-    return genai.Client(api_key=settings.GOOGLE_API_KEY)
+def _vertex_client() -> genai.Client:
+    """Return a Vertex-AI genai client using the configured GCS service account."""
+    project_id = settings.GCS_PROJECT_ID
+
+    if settings.GCS_CREDENTIALS_JSON:
+        info  = json.loads(settings.GCS_CREDENTIALS_JSON)
+        creds = service_account.Credentials.from_service_account_info(
+            info,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        project_id = project_id or info.get("project_id")
+    elif settings.GOOGLE_APPLICATION_CREDENTIALS:
+        creds = service_account.Credentials.from_service_account_file(
+            settings.GOOGLE_APPLICATION_CREDENTIALS,
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+    else:
+        # Fall back to Application Default Credentials (works on Cloud Run / GCE)
+        import google.auth
+        creds, adc_project = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        project_id = project_id or adc_project
+
+    return genai.Client(
+        vertexai=True,
+        project=project_id,
+        location=_VERTEX_LOCATION,
+        credentials=creds,
+    )
 
 
 async def nano_edit_image(
@@ -32,13 +64,12 @@ async def nano_edit_image(
     mode: str = "edit",      # "edit" | "swap" — both use EDIT_MODE_DEFAULT
 ) -> dict:
     """
-    Edit / swap an image using Google Imagen 3.
+    Edit / swap an image using Google Imagen 3 (Vertex AI).
 
     Args:
         image_bytes        : Raw bytes of the source image.
-        prompt             : Editing instruction, e.g.
-                             "Change the white t-shirt to a Nike dri-fit in coral red".
-        image_content_type : MIME type of the source image (image/jpeg or image/png).
+        prompt             : Editing instruction.
+        image_content_type : MIME type of the source image.
         strength           : Unused — kept for call-site compatibility.
         mode               : Unused — kept for call-site compatibility.
 
@@ -56,7 +87,7 @@ async def nano_edit_image(
         prompt,
     )
 
-    client = _client()
+    client = _vertex_client()
 
     reference_image = types.RawReferenceImage(
         reference_id=1,
@@ -85,7 +116,6 @@ async def nano_edit_image(
         )
 
     img = response.generated_images[0].image
-    # Imagen returns raw bytes; encode to base64 for transport
     result_b64 = base64.b64encode(img.image_bytes).decode("utf-8")
 
     logger.info("Imagen 3 edit complete | output_size=%dKB", len(img.image_bytes) // 1024)
@@ -93,18 +123,15 @@ async def nano_edit_image(
     return {
         "edited_image_url": None,
         "edited_image_b64": result_b64,
-        "request_id":       "imagen3",
+        "request_id":       "imagen3-vertex",
         "original_prompt":  prompt,
     }
 
 
 async def download_nano_result(url: str) -> bytes:
-    """
-    Download a result image from a URL (used when edited_image_url is set).
-    Not used by the Imagen path (which always returns bytes directly).
-    """
+    """Download a result image from a URL (used when edited_image_url is set)."""
     import httpx
-    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-        resp = await client.get(url)
+    async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as c:
+        resp = await c.get(url)
         resp.raise_for_status()
         return resp.content
