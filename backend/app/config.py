@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     GOOGLE_APPLICATION_CREDENTIALS: Optional[str] = None  # path to JSON key file
     GCS_CREDENTIALS_JSON: Optional[str] = None            # raw JSON string (preferred for cloud deployments)
 
+    # Vertex AI — Gemini + Imagen 3 image pipeline
+    # Region is hard-coded to us-central1 (only region supporting Imagen 3)
+    VERTEX_GEMINI_MODEL: str = "gemini-2.5-flash"         # prompt enhancement
+    VERTEX_IMAGEN_MODEL: str = "imagen-3.0-generate-002"  # HQ generation
+    VERTEX_IMAGEN_FAST_MODEL: str = "imagen-3.0-fast-generate-001"  # fast mode
+
     # App
     CORS_ORIGINS: str = "http://localhost:3000"
     POLL_INTERVAL_SECONDS: int = 20

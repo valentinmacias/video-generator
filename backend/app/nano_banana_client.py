@@ -1,157 +1,30 @@
 """
-Image editing client — Imagen 3 + Gemini 2.5 Pro
-──────────────────────────────────────────────────
-Step 1 — gemini-2.5-pro:   Analyse the source image and produce a detailed
-                            scene description (composition, lighting, pose,
-                            colours, background, subject details).
-Step 2 — imagen-3.0-generate-002: Generate a new image using a prompt that
-                            merges the scene description with the user's
-                            brand-swap instruction.
+Nano Banana / Symphony Brand Swap — thin delegation layer.
 
-This two-step approach is required because Imagen 3 is a text-to-image model
-(no image-input / inpainting via the standard AI-Studio API key).
+All generation logic lives in app.ai (Vertex AI Gemini + Imagen 3 pipeline).
+This module keeps the same public API that main.py expects:
+
+    nano_edit_image(image_bytes, prompt, ...) -> dict
+    download_nano_result(url)                 -> bytes
 """
-import base64
+from __future__ import annotations
+
 import logging
 from typing import Optional
 
-from google import genai
-from google.genai import types
-from google.genai.errors import ClientError
-
-from .config import settings
+from .ai import ImageGenerationPipeline, PipelineError
 
 logger = logging.getLogger(__name__)
 
-_DESCRIBE_MODEL = "gemini-2.5-pro"
-_IMAGEN_MODEL   = "imagen-3.0-generate-002"
-
-# ── Gemini system prompt: extract a rich scene description ─────────────────────
-_DESCRIBE_SYSTEM = (
-    "You are a professional photo analyst. "
-    "Describe the image in precise, visual terms suitable for re-generating it "
-    "with a text-to-image model. Include: scene setting, background, lighting "
-    "direction and quality, camera angle and distance, subject pose, clothing "
-    "details, colours, textures, and overall mood. "
-    "Be exhaustive but concise — one dense paragraph, no bullet points."
-)
-
-# ── Safety / quality phrases appended to the Imagen prompt ────────────────────
-_PROMPT_SUFFIX = (
-    " Photorealistic natural skin tone, respectful and dignified representation, "
-    "same pose and lighting preserved, zero artifacts, high fidelity, "
-    "photoreal UGC iPhone style."
-)
+# Module-level singleton — initialised on first call (cold-start mitigation)
+_pipeline: Optional[ImageGenerationPipeline] = None
 
 
-def _client() -> genai.Client:
-    return genai.Client(api_key=settings.GOOGLE_API_KEY)
-
-
-def _enrich_swap_prompt(user_prompt: str) -> str:
-    """Append quality/safety phrases unless the user already included them."""
-    p = user_prompt.strip().rstrip(".")
-    if "photorealistic" not in p.lower():
-        p += _PROMPT_SUFFIX
-    return p
-
-
-def _describe_image(
-    client: genai.Client,
-    image_bytes: bytes,
-    mime: str,
-) -> Optional[str]:
-    """
-    Use gemini-2.5-pro to produce a rich scene description of the source image.
-    Returns the description string, or None on failure.
-    """
-    try:
-        response = client.models.generate_content(
-            model=_DESCRIBE_MODEL,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_bytes(data=image_bytes, mime_type=mime),
-                        types.Part.from_text(
-                            text=(
-                                "Describe this image in full visual detail so it can "
-                                "be faithfully recreated by a text-to-image model. "
-                                "Include scene, background, lighting, pose, clothing, "
-                                "colours, and mood. One dense paragraph."
-                            )
-                        ),
-                    ],
-                )
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=_DESCRIBE_SYSTEM,
-                temperature=0.2,
-            ),
-        )
-        desc = response.text.strip() if response.text else None
-        if desc:
-            logger.info(
-                "Scene description (%d chars): %.200s…",
-                len(desc),
-                desc,
-            )
-        else:
-            logger.warning("gemini-2.5-pro returned no description text")
-        return desc
-    except ClientError as exc:
-        logger.warning("Description step failed (ClientError): %s", exc)
-        return None
-    except Exception as exc:
-        logger.warning("Description step failed: %s", exc)
-        return None
-
-
-def _build_imagen_prompt(description: Optional[str], swap_instruction: str) -> str:
-    """
-    Combine the scene description and the user's swap instruction into a
-    single, coherent Imagen prompt.
-    """
-    enriched = _enrich_swap_prompt(swap_instruction)
-    if description:
-        return (
-            f"{enriched}. "
-            f"Full scene context: {description}"
-        )
-    # No description available — fall back to the swap instruction alone
-    logger.warning("No scene description — generating from swap instruction only")
-    return enriched
-
-
-def _generate_with_imagen(client: genai.Client, prompt: str) -> Optional[bytes]:
-    """
-    Call imagen-3.0-generate-002 and return the first image's bytes, or None.
-    """
-    try:
-        response = client.models.generate_images(
-            model=_IMAGEN_MODEL,
-            prompt=prompt,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                safety_filter_level="block_some",
-                person_generation="allow_adult",
-            ),
-        )
-        images = response.generated_images
-        if images and images[0].image and images[0].image.image_bytes:
-            return images[0].image.image_bytes
-        logger.warning("Imagen returned no image bytes")
-        return None
-    except ClientError as exc:
-        logger.warning(
-            "Imagen ClientError %s — %s",
-            getattr(exc, "status_code", "?"),
-            exc,
-        )
-        return None
-    except Exception as exc:
-        logger.warning("Imagen unexpected error — %s", exc)
-        return None
+def _get_pipeline() -> ImageGenerationPipeline:
+    global _pipeline
+    if _pipeline is None:
+        _pipeline = ImageGenerationPipeline.default()
+    return _pipeline
 
 
 async def nano_edit_image(
@@ -159,65 +32,65 @@ async def nano_edit_image(
     prompt: str,
     image_content_type: str = "image/jpeg",
     *,
-    strength: float = 0.78,  # kept for API compatibility — unused
-    mode: str = "edit",      # kept for API compatibility — unused
+    strength: float = 0.78,   # kept for call-site compatibility — unused
+    mode: str = "edit",        # kept for call-site compatibility — unused
 ) -> dict:
     """
-    Brand-swap an image: analyse with Gemini 2.5 Pro, generate with Imagen 3.
+    Brand-swap an image using the Vertex AI Gemini + Imagen 3 pipeline.
 
-    Args:
-        image_bytes        : Raw bytes of the source image.
-        prompt             : Natural-language swap instruction.
-        image_content_type : MIME type of the source image.
-        strength           : Unused — kept for call-site compatibility.
-        mode               : Unused — kept for call-site compatibility.
+    Flow
+    ----
+    1. GeminiClient.describe_image(source)   — scene context
+    2. GeminiClient.enhance_prompt(swap)     — Imagen-optimised prompt
+    3. ImagenClient.generate_image(prompt)   — final image bytes
 
-    Returns dict with keys:
-        edited_image_url : None  (bytes returned inline)
-        edited_image_b64 : str   — Base-64 encoded result PNG
-        request_id       : str   — model that generated the image
-        original_prompt  : str   — original user prompt (pre-enrichment)
+    Returns
+    -------
+    {
+        "edited_image_url":  None,          # upstream uploads to GCS
+        "edited_image_b64":  str,           # base-64 result image
+        "request_id":        str,           # Imagen model name used
+        "original_prompt":   str,           # original user prompt
+        "enhanced_prompt":   str,           # Gemini-enhanced prompt sent to Imagen
+    }
+
+    Raises RuntimeError (wrapping PipelineError details) on unrecoverable failure.
     """
     mime = image_content_type if image_content_type.startswith("image/") else "image/jpeg"
-    client = _client()
 
     logger.info(
-        "Brand-swap | describe=%s | generate=%s | size=%dKB | prompt=%.120s",
-        _DESCRIBE_MODEL,
-        _IMAGEN_MODEL,
+        "nano_edit_image | size=%dKB | mime=%s | prompt=%.120s",
         len(image_bytes) // 1024,
+        mime,
         prompt,
     )
 
-    # Step 1 — describe source image
-    description = _describe_image(client, image_bytes, mime)
-
-    # Step 2 — build and execute Imagen prompt
-    imagen_prompt = _build_imagen_prompt(description, prompt)
-    logger.info("Imagen prompt (%.200s…)", imagen_prompt)
-
-    result_bytes = _generate_with_imagen(client, imagen_prompt)
-
-    if result_bytes is None:
-        raise RuntimeError(
-            "Image generation failed: Imagen returned no image. "
-            "The prompt may have triggered safety filters — try rephrasing "
-            "with 'photorealistic, respectful representation'. "
-            f"(model={_IMAGEN_MODEL})"
+    try:
+        result = await _get_pipeline().generate(
+            user_prompt=prompt,
+            source_image_bytes=image_bytes,
+            image_mime_type=mime,
         )
-
-    result_b64 = base64.b64encode(result_bytes).decode("utf-8")
-    logger.info(
-        "Brand-swap complete | model=%s | output_size=%dKB",
-        _IMAGEN_MODEL,
-        len(result_bytes) // 1024,
-    )
+    except PipelineError as exc:
+        logger.error(
+            "Pipeline error [%s] retryable=%s: %s",
+            exc.error_type.value,
+            exc.retryable,
+            exc.message,
+        )
+        raise RuntimeError(
+            f"Image generation failed [{exc.error_type.value}]: {exc.message}"
+        ) from exc
+    except Exception as exc:
+        logger.error("Unexpected pipeline error: %s", exc, exc_info=True)
+        raise RuntimeError(f"Image generation failed: {exc}") from exc
 
     return {
         "edited_image_url": None,
-        "edited_image_b64": result_b64,
-        "request_id":       _IMAGEN_MODEL,
+        "edited_image_b64": result["image_b64"],
+        "request_id":       result["model"],
         "original_prompt":  prompt,
+        "enhanced_prompt":  result["enhanced_prompt"],
     }
 
 
