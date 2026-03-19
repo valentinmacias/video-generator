@@ -23,7 +23,9 @@ Imagen is ALWAYS called with generateImages() — never predict() or generateCon
 from __future__ import annotations
 
 import base64
+import json
 import logging
+import os
 from typing import Optional
 
 import vertexai
@@ -33,6 +35,63 @@ from .imagen_client  import ImagenClient
 from .models         import PipelineError, PipelineErrorType
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_project_id() -> str:
+    """
+    Resolve the GCP project ID using the first source that works:
+
+    1. settings.GCS_PROJECT_ID          (explicit env var — fastest)
+    2. settings.GCS_CREDENTIALS_JSON    (inline service-account JSON string)
+    3. settings.GOOGLE_APPLICATION_CREDENTIALS  (path to SA JSON file)
+    4. GOOGLE_CLOUD_PROJECT / GCLOUD_PROJECT    (GCP runtime env vars)
+
+    Raises PipelineError(AUTH_ERROR) if none succeed.
+    """
+    from ..config import settings  # noqa: PLC0415
+
+    # 1. Explicit setting
+    if settings.GCS_PROJECT_ID:
+        return settings.GCS_PROJECT_ID
+
+    # 2. Inline JSON string
+    if settings.GCS_CREDENTIALS_JSON:
+        try:
+            data = json.loads(settings.GCS_CREDENTIALS_JSON)
+            if pid := data.get("project_id"):
+                logger.info("Resolved GCP project_id from GCS_CREDENTIALS_JSON: %s", pid)
+                return pid
+        except json.JSONDecodeError:
+            pass
+
+    # 3. Path to JSON key file
+    creds_path = (
+        settings.GOOGLE_APPLICATION_CREDENTIALS
+        or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    )
+    if creds_path and os.path.isfile(creds_path):
+        try:
+            with open(creds_path) as fh:
+                data = json.load(fh)
+            if pid := data.get("project_id"):
+                logger.info("Resolved GCP project_id from credentials file: %s", pid)
+                return pid
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    # 4. Runtime env vars set by GCP infra (Cloud Run, GKE, etc.)
+    for env_key in ("GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT", "GCP_PROJECT"):
+        if pid := os.environ.get(env_key):
+            logger.info("Resolved GCP project_id from env %s: %s", env_key, pid)
+            return pid
+
+    raise PipelineError(
+        PipelineErrorType.AUTH_ERROR,
+        "Cannot determine GCP project ID. "
+        "Set GCS_PROJECT_ID in your .env, or ensure GOOGLE_APPLICATION_CREDENTIALS "
+        "points to a valid service-account JSON file that contains 'project_id'.",
+        retryable=False,
+    )
 
 
 class ImageGenerationPipeline:
@@ -79,7 +138,7 @@ class ImageGenerationPipeline:
         """
         from ..config import settings  # noqa: PLC0415
 
-        project_id = settings.GCS_PROJECT_ID or ""
+        project_id = _resolve_project_id()
         model      = getattr(settings, "VERTEX_IMAGEN_MODEL", imagen_model)
 
         gemini = GeminiClient()

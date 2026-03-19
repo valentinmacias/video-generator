@@ -65,16 +65,11 @@ class GeminiClient:
             return
 
         # Import inside method: defers heavy SDK import to first use
-        import vertexai                         # noqa: PLC0415
-        from ..config import settings           # noqa: PLC0415
+        import vertexai                                         # noqa: PLC0415
+        from ..config import settings                           # noqa: PLC0415
+        from .image_pipeline import _resolve_project_id        # noqa: PLC0415
 
-        project_id = settings.GCS_PROJECT_ID
-        if not project_id:
-            raise PipelineError(
-                PipelineErrorType.AUTH_ERROR,
-                "GCS_PROJECT_ID must be set for Vertex AI (used as the GCP project).",
-                retryable=False,
-            )
+        project_id = _resolve_project_id()
 
         self._project_id = project_id
         self._model_name = settings.VERTEX_GEMINI_MODEL
